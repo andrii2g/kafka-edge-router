@@ -1,0 +1,28 @@
+name: Bug report
+description: Report reproducible incorrect behavior
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: semantics
+    attributes:
+      label: Delivery, tenant, or ordering impact
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Router version, Rust version, OS, Kafka version, protocol, configuration with secrets removed.
+    validations:
+      required: true

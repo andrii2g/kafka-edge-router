@@ -1,0 +1,5 @@
+* @andrii2g
+/crates/router-core/ @andrii2g
+/crates/router-api/ @andrii2g
+/crates/router-webhook/ @andrii2g
+/docs/adr/ @andrii2g

@@ -1,0 +1,27 @@
+name: Feature proposal
+description: Propose a bounded and testable capability
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed contract
+    validations:
+      required: true
+  - type: textarea
+    id: bounds
+    attributes:
+      label: Resource bounds and failure semantics
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and delivery-semantic impact
+    validations:
+      required: true
