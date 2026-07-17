@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Rust Kafka Edge Router WebSocket client</title>
+  <style>body{font:16px system-ui;max-width:960px;margin:2rem auto}pre{background:#111;color:#eee;padding:1rem;min-height:20rem;overflow:auto}button{margin-right:.5rem}</style>
+</head>
+<body>
+  <h1>WebSocket client</h1>
+  <button id="connect">Connect</button>
+  <button id="subscribe">Subscribe to news</button>
+  <button id="close">Close</button>
+  <pre id="log"></pre>
+  <script>
+    let socket;
+    const log = (value) => document.querySelector('#log').textContent += `${value}\n`;
+    document.querySelector('#connect').onclick = () => {
+      socket = new WebSocket('ws://127.0.0.1:8080/v1/ws?tenant_id=tenant-demo');
+      socket.onopen = () => log('connected');
+      socket.onmessage = (event) => log(event.data);
+      socket.onclose = () => log('closed');
+      socket.onerror = () => log('error');
+    };
+    document.querySelector('#subscribe').onclick = () => socket?.send(JSON.stringify({
+      operation: 'subscribe',
+      subscription_id: 'browser-news',
+      filter: { kind: 'content', channel: 'news' }
+    }));
+    document.querySelector('#close').onclick = () => socket?.close();
+  </script>
+</body>
+</html>

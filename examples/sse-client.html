@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Rust Kafka Edge Router SSE client</title>
+  <style>body{font:16px system-ui;max-width:960px;margin:2rem auto}pre{background:#111;color:#eee;padding:1rem;min-height:20rem;overflow:auto}</style>
+</head>
+<body>
+  <h1>SSE client</h1>
+  <pre id="log"></pre>
+  <script>
+    const output = document.querySelector('#log');
+    const source = new EventSource('http://127.0.0.1:8080/v1/events?tenant_id=tenant-demo&kind=content&channel=news');
+    source.onmessage = (event) => output.textContent += `${event.data}\n`;
+    source.addEventListener('content.broadcast', (event) => output.textContent += `${event.data}\n`);
+    source.onerror = () => output.textContent += 'stream reconnecting...\n';
+  </script>
+</body>
+</html>
