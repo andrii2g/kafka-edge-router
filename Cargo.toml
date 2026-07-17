@@ -33,7 +33,7 @@ config = { version = "0.15", default-features = false, features = ["toml"] }
 dashmap = "6"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 hex = "0.4"
-hmac = "0.12"
+hmac = "0.13"
 http = "1"
 prost = "0.14"
 protoc-bin-vendored = "3"
