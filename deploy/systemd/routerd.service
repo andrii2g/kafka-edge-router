@@ -1,0 +1,33 @@
+[Unit]
+Description=Rust Kafka Edge Router
+Documentation=https://github.com/OWNER/rust-kafka-edge-router
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=kafka-router
+Group=kafka-router
+ExecStart=/usr/local/bin/routerd --config /etc/rust-kafka-edge-router/router.toml
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=35s
+KillSignal=SIGTERM
+Environment=RUST_LOG=routerd=info,router_core=info,router_kafka=info,router_api=info,router_webhook=info
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+UMask=0077
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
