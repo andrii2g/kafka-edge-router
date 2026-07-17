@@ -103,9 +103,7 @@ impl Metrics {
             delivered_connections: self.delivered_connections.load(Ordering::Relaxed),
             full_connections: self.full_connections.load(Ordering::Relaxed),
             closed_connections: self.closed_connections.load(Ordering::Relaxed),
-            slow_consumer_disconnects: self
-                .slow_consumer_disconnects
-                .load(Ordering::Relaxed),
+            slow_consumer_disconnects: self.slow_consumer_disconnects.load(Ordering::Relaxed),
             websocket_opened: self.websocket_opened.load(Ordering::Relaxed),
             sse_opened: self.sse_opened.load(Ordering::Relaxed),
             grpc_opened: self.grpc_opened.load(Ordering::Relaxed),
@@ -157,7 +155,11 @@ pub struct MetricsSnapshot {
 }
 
 /// Renders metrics in Prometheus/OpenMetrics-compatible text format.
-pub fn render_prometheus(metrics: MetricsSnapshot, active_connections: usize, subscriptions: usize) -> String {
+pub fn render_prometheus(
+    metrics: MetricsSnapshot,
+    active_connections: usize,
+    subscriptions: usize,
+) -> String {
     format!(
         concat!(
             "# TYPE router_kafka_messages_total counter\n",

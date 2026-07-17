@@ -34,7 +34,10 @@ pub struct KafkaIngestor {
 
 impl KafkaIngestor {
     /// Creates and subscribes a stream consumer.
-    pub fn new(config: &KafkaConsumerConfig, router: Arc<Router>) -> Result<Self, KafkaIngestError> {
+    pub fn new(
+        config: &KafkaConsumerConfig,
+        router: Arc<Router>,
+    ) -> Result<Self, KafkaIngestError> {
         let mut client = ClientConfig::new();
         for (key, value) in &config.properties {
             client.set(key, value);
@@ -81,7 +84,7 @@ impl KafkaIngestor {
                 result = self.consumer.recv() => {
                     match result {
                         Ok(record) => {
-                            let bytes = record.payload().map_or(0, |payload| payload.len());
+                            let bytes = record.payload().map_or(0, <[u8]>::len);
                             self.router.metrics().record_kafka_message(bytes);
                             match decode_message(&record, self.max_payload_bytes) {
                                 Ok(message) => {

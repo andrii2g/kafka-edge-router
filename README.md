@@ -337,8 +337,8 @@ make check
 make validate
 ```
 
-Before the first merge, run task 000 to generate and commit `Cargo.lock`, then update
-Docker and CI commands to use `--locked`.
+The committed `Cargo.lock` is enforced by local build targets, CI, container builds, and
+release builds through `--locked`.
 
 ## Codex workflow
 
@@ -358,7 +358,7 @@ A ready-to-paste initial instruction is available in [`CODEX_PROMPT.md`](CODEX_P
 
 These are tracked rather than hidden:
 
-- no committed Cargo lockfile until task 000 runs with registry access;
+
 - no DNS-resolution pinning/revalidation for webhook hosts;
 - webhook retries are not durable across restart;
 - authentication does not yet validate JWT signatures or JWKS rotation;

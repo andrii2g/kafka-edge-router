@@ -22,12 +22,11 @@ fn default_shutdown_grace_secs() -> u64 {
 }
 
 fn default_log_filter() -> String {
-    "routerd=info,router_core=info,router_kafka=info,router_api=info,router_webhook=info"
-        .to_owned()
+    "routerd=info,router_core=info,router_kafka=info,router_api=info,router_webhook=info".to_owned()
 }
 
 /// Complete deserialized process configuration.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
     /// Listener and shutdown behavior.
@@ -44,20 +43,6 @@ pub struct AppConfig {
     pub webhooks: WebhookConfig,
     /// Log formatting.
     pub logging: LoggingConfig,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            api: ApiConfig::default(),
-            router: RouterConfig::default(),
-            auth: AuthConfig::default(),
-            kafka: KafkaConfig::default(),
-            webhooks: WebhookConfig::default(),
-            logging: LoggingConfig::default(),
-        }
-    }
 }
 
 impl AppConfig {
@@ -81,6 +66,12 @@ impl AppConfig {
     }
 
     fn validate(&self) -> anyhow::Result<()> {
+        self.validate_listener_and_limits()?;
+        self.validate_kafka_and_auth()?;
+        self.validate_webhooks()
+    }
+
+    fn validate_listener_and_limits(&self) -> anyhow::Result<()> {
         self.server
             .http_addr
             .parse::<SocketAddr>()
@@ -89,12 +80,6 @@ impl AppConfig {
             .grpc_addr
             .parse::<SocketAddr>()
             .context("server.grpc_addr is not a socket address")?;
-        if self.kafka.consumer.topics.is_empty() {
-            bail!("kafka.consumer.topics must not be empty");
-        }
-        if self.kafka.consumer.max_payload_bytes == 0 {
-            bail!("kafka.consumer.max_payload_bytes must be positive");
-        }
         if self.api.http_body_limit_bytes == 0 || self.api.sse_keep_alive_secs == 0 {
             bail!("HTTP body limit and SSE keep-alive interval must be positive");
         }
@@ -105,18 +90,28 @@ impl AppConfig {
             || self.router.max_subscriptions_per_connection == 0
             || self.router.slow_consumer_strikes == 0
         {
-            bail!("queue capacities, subscription limits, and slow-consumer strikes must be positive");
+            bail!(
+                "queue capacities, subscription limits, and slow-consumer strikes must be positive"
+            );
         }
         if self.router.default_queue_capacity > self.router.max_queue_capacity {
             bail!("router.default_queue_capacity must not exceed router.max_queue_capacity");
         }
         if self.api.stream_queue_capacity > self.api.max_stream_queue_capacity {
-            bail!(
-                "api.stream_queue_capacity must not exceed api.max_stream_queue_capacity"
-            );
+            bail!("api.stream_queue_capacity must not exceed api.max_stream_queue_capacity");
         }
         if self.api.max_stream_queue_capacity > self.router.max_queue_capacity {
             bail!("api.max_stream_queue_capacity must not exceed router.max_queue_capacity");
+        }
+        Ok(())
+    }
+
+    fn validate_kafka_and_auth(&self) -> anyhow::Result<()> {
+        if self.kafka.consumer.topics.is_empty() {
+            bail!("kafka.consumer.topics must not be empty");
+        }
+        if self.kafka.consumer.max_payload_bytes == 0 {
+            bail!("kafka.consumer.max_payload_bytes must be positive");
         }
         if self.kafka.consumer.brokers.trim().is_empty()
             || self.kafka.consumer.group_id.trim().is_empty()
@@ -133,7 +128,10 @@ impl AppConfig {
         {
             bail!("kafka.consumer.topics must not contain empty names");
         }
-        if !matches!(self.kafka.consumer.auto_offset_reset.as_str(), "earliest" | "latest") {
+        if !matches!(
+            self.kafka.consumer.auto_offset_reset.as_str(),
+            "earliest" | "latest"
+        ) {
             bail!("kafka.consumer.auto_offset_reset must be earliest or latest");
         }
         if self.kafka.producer.enabled
@@ -147,6 +145,10 @@ impl AppConfig {
         if self.auth.mode == AuthMode::StaticBearer && self.auth.bearer_tokens.is_empty() {
             bail!("auth.bearer_tokens must not be empty in static_bearer mode");
         }
+        Ok(())
+    }
+
+    fn validate_webhooks(&self) -> anyhow::Result<()> {
         let mut webhook_ids = HashSet::new();
         for destination in &self.webhooks.destinations {
             if destination.id.trim().is_empty() {

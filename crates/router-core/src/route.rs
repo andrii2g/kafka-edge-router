@@ -57,17 +57,23 @@ impl RouteFilter {
     /// Reference matcher used by tests and diagnostics.
     pub fn matches(&self, metadata: &RoutingMetadata) -> bool {
         self.tenant_id == metadata.tenant_id
-            && optional_matches(&self.kind, &metadata.kind)
-            && optional_matches(&self.message_type, &metadata.message_type)
-            && optional_matches(&self.channel, &metadata.channel)
-            && optional_matches(&self.actor_id, &metadata.actor_id)
-            && optional_matches(&self.audience_type, &metadata.audience_type)
-            && optional_matches(&self.audience_id, &metadata.audience_id)
+            && optional_matches(self.kind.as_deref(), metadata.kind.as_deref())
+            && optional_matches(
+                self.message_type.as_deref(),
+                metadata.message_type.as_deref(),
+            )
+            && optional_matches(self.channel.as_deref(), metadata.channel.as_deref())
+            && optional_matches(self.actor_id.as_deref(), metadata.actor_id.as_deref())
+            && optional_matches(
+                self.audience_type.as_deref(),
+                metadata.audience_type.as_deref(),
+            )
+            && optional_matches(self.audience_id.as_deref(), metadata.audience_id.as_deref())
     }
 }
 
-fn optional_matches(expected: &Option<Arc<str>>, actual: &Option<Arc<str>>) -> bool {
-    expected.as_ref().is_none_or(|expected| actual.as_ref() == Some(expected))
+fn optional_matches(expected: Option<&str>, actual: Option<&str>) -> bool {
+    expected.is_none_or(|expected| actual == Some(expected))
 }
 
 /// Hash key stored in the compiled subscription index.
@@ -100,7 +106,7 @@ impl RouteKey {
     /// Expands a message into exact/wildcard keys. With six populated optional
     /// dimensions, this creates exactly 64 direct hash lookups.
     pub fn candidates(metadata: &RoutingMetadata) -> SmallVec<[Self; 64]> {
-        let mut keys = SmallVec::new();
+        let mut keys = SmallVec::<[Self; 64]>::new();
         keys.push(Self {
             tenant_id: Arc::clone(&metadata.tenant_id),
             kind: metadata.kind.clone(),

@@ -14,6 +14,6 @@ docker run --rm --network host \
   rust-kafka-edge-router:local
 ```
 
-After task 000 commits `Cargo.lock`, the Docker build must use `cargo build --locked`.
+The Docker build copies the committed `Cargo.lock` and uses `cargo build --locked`.
 The runtime image is non-root and contains only CA certificates, the binary, and a default
 configuration file.

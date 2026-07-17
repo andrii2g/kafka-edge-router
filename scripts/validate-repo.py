@@ -18,6 +18,14 @@ import tree_sitter_rust
 
 ROOT = Path(__file__).resolve().parents[1]
 ERRORS: list[str] = []
+EXCLUDED_PARTS = {".git", "target"}
+
+
+def repository_paths(pattern: str):
+    """Yield repository paths while excluding generated and VCS directories."""
+    for path in ROOT.rglob(pattern):
+        if EXCLUDED_PARTS.isdisjoint(path.relative_to(ROOT).parts):
+            yield path
 
 EXPECTED = [
     ".editorconfig",
@@ -58,7 +66,7 @@ def check_expected() -> None:
 
 
 def check_text_files() -> None:
-    for path in sorted(ROOT.rglob("*")):
+    for path in sorted(repository_paths("*")):
         if not path.is_file() or ".git" in path.parts:
             continue
         if path.stat().st_size == 0:
@@ -82,7 +90,7 @@ def check_text_files() -> None:
 
 
 def check_toml() -> None:
-    for path in sorted(ROOT.rglob("*.toml")):
+    for path in sorted(repository_paths("*.toml")):
         try:
             with path.open("rb") as stream:
                 tomllib.load(stream)
@@ -92,7 +100,7 @@ def check_toml() -> None:
 
 def check_yaml() -> None:
     for suffix in ("*.yaml", "*.yml"):
-        for path in sorted(ROOT.rglob(suffix)):
+        for path in sorted(repository_paths(suffix)):
             try:
                 with path.open(encoding="utf-8") as stream:
                     list(yaml.safe_load_all(stream))
@@ -101,7 +109,7 @@ def check_yaml() -> None:
 
 
 def check_json() -> None:
-    for path in sorted(ROOT.rglob("*.json")):
+    for path in sorted(repository_paths("*.json")):
         try:
             json.loads(path.read_text(encoding="utf-8"))
         except Exception as exc:  # noqa: BLE001
@@ -110,21 +118,32 @@ def check_json() -> None:
 
 def check_shell() -> None:
     for path in sorted((ROOT / "scripts").glob("*.sh")):
+        relative = path.relative_to(ROOT).as_posix()
         result = subprocess.run(
-            ["bash", "-n", str(path)],
+            ["bash", "-n", relative],
             text=True,
             capture_output=True,
             check=False,
         )
         if result.returncode:
             error(f"shell syntax {path.relative_to(ROOT)}: {result.stderr.strip()}")
-        if not (path.stat().st_mode & stat.S_IXUSR):
+        if os.name == "nt":
+            mode = subprocess.run(
+                ["git", "ls-files", "--stage", "--", relative],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.split(maxsplit=1)[0]
+            executable = mode == "100755"
+        else:
+            executable = bool(path.stat().st_mode & stat.S_IXUSR)
+        if not executable:
             error(f"script is not executable: {path.relative_to(ROOT)}")
 
 
 def check_rust_syntax() -> None:
     parser = Parser(Language(tree_sitter_rust.language()))
-    for path in sorted(ROOT.rglob("*.rs")):
+    for path in sorted(repository_paths("*.rs")):
         tree = parser.parse(path.read_bytes())
         if tree.root_node.has_error:
             error(f"Rust syntax tree contains an error: {path.relative_to(ROOT)}")
@@ -132,7 +151,7 @@ def check_rust_syntax() -> None:
 
 def check_markdown_links() -> None:
     pattern = re.compile(r"!?(?:\[[^\]]*\])\(([^)]+)\)")
-    for path in sorted(ROOT.rglob("*.md")):
+    for path in sorted(repository_paths("*.md")):
         text = path.read_text(encoding="utf-8")
         for raw in pattern.findall(text):
             target = raw.strip().split()[0].strip("<>")
@@ -203,11 +222,11 @@ def main() -> int:
         return 1
 
     counts = {
-        "files": sum(1 for path in ROOT.rglob("*") if path.is_file()),
-        "rust": sum(1 for _ in ROOT.rglob("*.rs")),
-        "toml": sum(1 for _ in ROOT.rglob("*.toml")),
-        "yaml": sum(1 for _ in ROOT.rglob("*.yaml")) + sum(1 for _ in ROOT.rglob("*.yml")),
-        "markdown": sum(1 for _ in ROOT.rglob("*.md")),
+        "files": sum(1 for path in repository_paths("*") if path.is_file()),
+        "rust": sum(1 for _ in repository_paths("*.rs")),
+        "toml": sum(1 for _ in repository_paths("*.toml")),
+        "yaml": sum(1 for _ in repository_paths("*.yaml")) + sum(1 for _ in repository_paths("*.yml")),
+        "markdown": sum(1 for _ in repository_paths("*.md")),
     }
     print("repository validation passed")
     print(" ".join(f"{name}={value}" for name, value in counts.items()))

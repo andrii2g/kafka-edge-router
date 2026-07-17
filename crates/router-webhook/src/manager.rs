@@ -1,6 +1,6 @@
 //! One ordered worker and bounded queue per static webhook destination.
 
-use std::{net::IpAddr, str::FromStr, sync::Arc, time::Duration};
+use std::{net::IpAddr, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use hmac::{Hmac, Mac};
@@ -58,16 +58,15 @@ pub struct WebhookManager {
 
 impl WebhookManager {
     /// Validates destinations, registers filters, and creates HTTP clients.
-    pub fn new(config: &WebhookConfig, router: Arc<Router>) -> Result<Self, WebhookError> {
+    pub fn new(config: &WebhookConfig, router: &Arc<Router>) -> Result<Self, WebhookError> {
         if !config.enabled {
-            return Ok(Self { workers: Vec::new() });
+            return Ok(Self {
+                workers: Vec::new(),
+            });
         }
         let mut workers = Vec::with_capacity(config.destinations.len());
         for destination in &config.destinations {
-            workers.push(WebhookWorker::new(
-                destination.clone(),
-                Arc::clone(&router),
-            )?);
+            workers.push(WebhookWorker::new(destination.clone(), Arc::clone(router))?);
         }
         Ok(Self { workers })
     }
@@ -147,9 +146,7 @@ impl WebhookWorker {
                 });
             }
         };
-        if let Err(error) =
-            router.subscribe(connection_id, subscription_id, config.filter)
-        {
+        if let Err(error) = router.subscribe(connection_id, subscription_id, config.filter) {
             router.unregister_connection(connection_id);
             return Err(WebhookError::Registration {
                 id: config.id,
@@ -166,9 +163,7 @@ impl WebhookWorker {
             max_attempts: config.max_attempts.max(1),
             initial_backoff: Duration::from_millis(config.initial_backoff_ms.max(1)),
             max_backoff: Duration::from_millis(
-                config
-                    .max_backoff_ms
-                    .max(config.initial_backoff_ms.max(1)),
+                config.max_backoff_ms.max(config.initial_backoff_ms.max(1)),
             ),
             router,
             connection_id,
@@ -325,12 +320,11 @@ fn parse_headers(
                 reason: "reserved transport header".to_owned(),
             });
         }
-        let parsed_value = HeaderValue::from_str(value).map_err(|error| {
-            WebhookError::InvalidHeader {
+        let parsed_value =
+            HeaderValue::from_str(value).map_err(|error| WebhookError::InvalidHeader {
                 name: name.clone(),
                 reason: error.to_string(),
-            }
-        })?;
+            })?;
         headers.push((parsed_name, parsed_value));
     }
     Ok(headers)
@@ -339,9 +333,7 @@ fn parse_headers(
 fn retryable_status(status: StatusCode) -> bool {
     matches!(
         status,
-        StatusCode::REQUEST_TIMEOUT
-            | StatusCode::TOO_EARLY
-            | StatusCode::TOO_MANY_REQUESTS
+        StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_EARLY | StatusCode::TOO_MANY_REQUESTS
     ) || status.is_server_error()
 }
 

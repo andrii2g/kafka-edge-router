@@ -61,8 +61,7 @@ impl MessagePublisher for KafkaPublisher {
         let message_id = command
             .message_id
             .as_deref()
-            .map(str::to_owned)
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
+            .map_or_else(|| Uuid::new_v4().to_string(), str::to_owned);
 
         RoutingMetadata {
             message_id: Arc::from(message_id.as_str()),
@@ -105,7 +104,7 @@ impl MessagePublisher for KafkaPublisher {
             .key(key.as_bytes())
             .payload(command.payload.as_ref())
             .headers(headers);
-        let (partition, offset) = self
+        let delivery = self
             .producer
             .send(record, Timeout::After(self.delivery_timeout))
             .await
@@ -114,8 +113,8 @@ impl MessagePublisher for KafkaPublisher {
         Ok(PublishReceipt {
             message_id,
             topic: self.topic.clone(),
-            partition,
-            offset,
+            partition: delivery.partition,
+            offset: delivery.offset,
         })
     }
 }

@@ -24,7 +24,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           targets: ${{ matrix.target }}
-      - run: cargo build --release --bin routerd --target ${{ matrix.target }}
+      - run: cargo build --locked --release --bin routerd --target ${{ matrix.target }}
       - name: Package
         run: |
           mkdir -p dist

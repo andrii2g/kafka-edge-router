@@ -4,9 +4,9 @@ WORKDIR /workspace
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential cmake pkg-config \
     && rm -rf /var/lib/apt/lists/*
-COPY Cargo.toml rust-toolchain.toml rustfmt.toml clippy.toml ./
+COPY Cargo.toml Cargo.lock rust-toolchain.toml rustfmt.toml clippy.toml ./
 COPY crates ./crates
-RUN cargo build --release --bin routerd
+RUN cargo build --locked --release --bin routerd
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \

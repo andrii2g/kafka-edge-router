@@ -268,10 +268,8 @@ async fn websocket_session(
                             connection_id,
                             text.as_str(),
                         );
-                        if let Some(response) = response {
-                            if sender.send(Message::Text(response.into())).await.is_err() {
-                                break;
-                            }
+                        if sender.send(Message::Text(response.into())).await.is_err() {
+                            break;
                         }
                     }
                     Ok(Message::Ping(payload)) => {
@@ -280,7 +278,7 @@ async fn websocket_session(
                         }
                     }
                     Ok(Message::Close(_)) | Err(_) => break,
-                    Ok(Message::Binary(_)) | Ok(Message::Pong(_)) => {}
+                    Ok(Message::Binary(_) | Message::Pong(_)) => {}
                 }
             }
         }
@@ -293,10 +291,10 @@ fn handle_ws_command(
     principal: &Principal,
     connection_id: ConnectionId,
     text: &str,
-) -> Option<String> {
+) -> String {
     let command: WsCommand = match serde_json::from_str(text) {
         Ok(command) => command,
-        Err(error) => return Some(ws_error("invalid_json", error.to_string())),
+        Err(error) => return ws_error("invalid_json", &error.to_string()),
     };
     match command {
         WsCommand::Subscribe {
@@ -305,53 +303,47 @@ fn handle_ws_command(
         } => {
             let subscription_id = match SubscriptionId::new(subscription_id) {
                 Ok(value) => value,
-                Err(error) => return Some(ws_error("invalid_subscription", error.to_string())),
+                Err(error) => return ws_error("invalid_subscription", &error.to_string()),
             };
             let filter = match filter.into_filter(principal) {
                 Ok(filter) => filter,
-                Err(error) => return Some(ws_error("invalid_filter", error.to_string())),
+                Err(error) => return ws_error("invalid_filter", &error.to_string()),
             };
             match state
                 .router
                 .subscribe(connection_id, subscription_id.clone(), filter)
             {
-                Ok(()) => Some(
-                    json!({
-                        "operation": "subscribed",
-                        "subscription_id": subscription_id.as_str()
-                    })
-                    .to_string(),
-                ),
-                Err(error) => Some(ws_error("subscribe_failed", error.to_string())),
+                Ok(()) => json!({
+                    "operation": "subscribed",
+                    "subscription_id": subscription_id.as_str()
+                })
+                .to_string(),
+                Err(error) => ws_error("subscribe_failed", &error.to_string()),
             }
         }
         WsCommand::Unsubscribe { subscription_id } => {
             let subscription_id = match SubscriptionId::new(subscription_id) {
                 Ok(value) => value,
-                Err(error) => return Some(ws_error("invalid_subscription", error.to_string())),
+                Err(error) => return ws_error("invalid_subscription", &error.to_string()),
             };
             match state.router.unsubscribe(connection_id, &subscription_id) {
-                Ok(()) => Some(
-                    json!({
-                        "operation": "unsubscribed",
-                        "subscription_id": subscription_id.as_str()
-                    })
-                    .to_string(),
-                ),
-                Err(error) => Some(ws_error("unsubscribe_failed", error.to_string())),
+                Ok(()) => json!({
+                    "operation": "unsubscribed",
+                    "subscription_id": subscription_id.as_str()
+                })
+                .to_string(),
+                Err(error) => ws_error("unsubscribe_failed", &error.to_string()),
             }
         }
-        WsCommand::Ping { opaque } => Some(
-            json!({
-                "operation": "pong",
-                "opaque": opaque
-            })
-            .to_string(),
-        ),
+        WsCommand::Ping { opaque } => json!({
+            "operation": "pong",
+            "opaque": opaque
+        })
+        .to_string(),
     }
 }
 
-fn ws_error(code: &str, message: String) -> String {
+fn ws_error(code: &str, message: &str) -> String {
     json!({
         "operation": "error",
         "code": code,
@@ -465,10 +457,7 @@ async fn sse(
     ))
 }
 
-fn stream_queue_capacity(
-    state: &ApiState,
-    requested: Option<usize>,
-) -> Result<usize, ApiError> {
+fn stream_queue_capacity(state: &ApiState, requested: Option<usize>) -> Result<usize, ApiError> {
     let capacity = requested.unwrap_or(state.config.stream_queue_capacity);
     if capacity == 0 || capacity > state.config.max_stream_queue_capacity {
         return Err(ApiError::BadRequest(format!(
