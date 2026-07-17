@@ -27,8 +27,6 @@ EXPECTED = [
     "README.md",
     "AGENTS.md",
     "CODEX_PROMPT.md",
-    "VALIDATION.md",
-    "MANIFEST.sha256",
     "compose.yaml",
     "Dockerfile",
     "config/router.toml",

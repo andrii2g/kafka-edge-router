@@ -17,7 +17,6 @@ lint gates.
 
 - root `Cargo.toml` and `rust-toolchain.toml`;
 - every crate manifest;
-- `VALIDATION.md`;
 - CI workflows; and
 - generated protobuf build configuration.
 
@@ -33,8 +32,7 @@ lint gates.
 7. Verify vendored `protoc` works without a system installation.
 8. Run `routerd --check-config` against both checked-in TOML files.
 9. Build the release binary and container.
-10. Update `VALIDATION.md`, `docs/IMPLEMENTATION_STATUS.md`, and `CHANGELOG.md` with exact
-    results.
+10. Update `docs/IMPLEMENTATION_STATUS.md` and `CHANGELOG.md` with the exact implementation and validation results. Include all executed validation commands and their outcomes in the final task summary.
 
 ## Acceptance criteria
 
