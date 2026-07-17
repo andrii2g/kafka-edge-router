@@ -29,7 +29,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: router
-          image: ghcr.io/OWNER/rust-kafka-edge-router:0.1.0
+          image: ghcr.io/andrii2g/kafka-edge-router:0.1.0
           imagePullPolicy: IfNotPresent
           args: ["--config", "/etc/router/router.toml"]
           env:

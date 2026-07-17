@@ -1,6 +1,6 @@
 [Unit]
 Description=Rust Kafka Edge Router
-Documentation=https://github.com/OWNER/rust-kafka-edge-router
+Documentation=https://github.com/andrii2g/kafka-edge-router
 Wants=network-online.target
 After=network-online.target
 
