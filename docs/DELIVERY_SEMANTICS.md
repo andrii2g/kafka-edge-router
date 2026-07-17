@@ -1,0 +1,133 @@
+# Delivery semantics
+
+## Terminology
+
+- **accepted locally**: core completed matching and applied bounded queue policy;
+- **written**: a protocol task completed a socket or HTTP write call;
+- **acknowledged by Kafka**: the producer received broker delivery coordinates;
+- **committed offset**: the consumer requested an offset commit for a consumed record;
+- **delivered to application**: the remote application processed the event, which the
+  live protocols cannot prove without an application acknowledgement.
+
+These states are not interchangeable.
+
+## Kafka to router
+
+The consumer disables auto commit and auto offset store. For a valid record it:
+
+1. decodes and validates metadata;
+2. dispatches according to local bounded queue policy; and
+3. requests an asynchronous commit for the record.
+
+A crash before commit can cause redelivery. A crash after commit but before socket write
+can cause live-delivery loss. Therefore Kafka-to-router processing is at least once, but
+router-to-live-client delivery is best effort.
+
+Invalid records are committed when `commit_invalid_messages = true`. This prevents a
+poison record from looping forever but means correction requires republishing or replay
+from a separate remediation process. Production deployments should alert on invalid
+record counters and retain enough source data to diagnose them.
+
+### Kafka configuration invariants
+
+The `[kafka.consumer.properties]` and `[kafka.producer.properties]` tables permit
+additional librdkafka tuning. The daemon applies those free-form properties first, then
+reapplies its semantic invariants. Consequently, free-form settings cannot override:
+
+- consumer bootstrap servers, group id, or client id;
+- `enable.auto.commit = false`;
+- `enable.auto.offset.store = false`;
+- the validated `auto.offset.reset` value;
+- producer bootstrap servers or client id;
+- the configured producer delivery timeout;
+- `enable.idempotence = true`; or
+- `acks = all`.
+
+This ordering prevents an operator-supplied property from silently weakening the delivery
+contract documented here. New invariant-bearing settings must follow the same precedence
+rule and need configuration tests.
+
+## Live protocols
+
+WebSocket, SSE, and gRPC queues are in memory. A queue-full result drops that delivery for
+that connection. After the configured number of full outcomes, the connection is
+unregistered and its protocol task eventually observes a closed receiver or failed
+socket.
+
+No live protocol currently persists:
+
+- subscriptions;
+- unacknowledged messages;
+- a client cursor; or
+- a replay window.
+
+Clients must reconnect, resubscribe, and deduplicate by message id.
+
+## Ordering
+
+Kafka records are observed in partition order by a consumer. The router dispatches each
+record synchronously before receiving the next from the stream loop. A connection queue
+therefore receives records in the order the consumer processes them.
+
+Ordering can still differ across:
+
+- distinct Kafka partitions;
+- router nodes using independent consumer groups;
+- webhook destinations with different retry delays; and
+- a client reconnecting to another router node.
+
+No global order is promised.
+
+## Duplicate scenarios
+
+Duplicates can occur when:
+
+- a consumer crashes after routing but before committing;
+- an asynchronous offset commit is not persisted before rebalance;
+- a producer retries without idempotence outside this router;
+- an operator replays a topic; or
+- a webhook times out after the remote service processed the request.
+
+Use `message_id` and webhook `idempotency-key` to make application handling idempotent.
+
+## Webhooks
+
+Current webhook retry is bounded but volatile:
+
+```text
+maximum attempts
+initial backoff
+exponential factor 2
+maximum backoff
+request timeout
+bounded destination queue
+```
+
+A process restart loses queued or sleeping deliveries. Task 007 introduces a durable
+delivery topic, retry scheduling, attempt metadata, and dead-letter topic. Only after
+that work and its recovery tests may documentation describe webhook delivery as durable.
+
+## Publishing
+
+HTTP or gRPC publish returns after the idempotent Kafka producer receives partition and
+offset. It proves broker acknowledgement, not consumption or downstream delivery.
+
+The producer uses a stable entity key selected from audience or channel. Callers that
+need stronger producer-side deduplication should provide a stable message id and ensure
+their own retry behavior does not intentionally create new ids.
+
+## Future durable-client mode
+
+A durable live-client mode requires a separate contract with at least:
+
+- stable consumer identity;
+- monotonic sequence or persisted source cursor;
+- acknowledgement command;
+- acknowledgement storage;
+- lease/session ownership and fencing;
+- replay retention and limits;
+- resumption token validation;
+- explicit behavior when retention is exceeded; and
+- tests for crash before/after every state transition.
+
+It must be opt-in and must not silently change the low-latency live mode.
