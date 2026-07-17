@@ -177,10 +177,11 @@ impl Router {
         filter: RouteFilter,
     ) -> Result<(), CoreError> {
         filter.validate()?;
+        let route_key = RouteKey::from(&filter);
         let _mutation_guard = self
             .mutation_lock
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         {
             let mut connection = self
                 .connections
@@ -197,12 +198,12 @@ impl Router {
             }
             let previous = connection
                 .subscriptions
-                .insert(subscription_id.clone(), filter.clone());
+                .insert(subscription_id.clone(), filter);
             debug_assert!(previous.is_none(), "duplicate subscription was pre-checked");
         }
 
         self.routes
-            .entry(RouteKey::from(&filter))
+            .entry(route_key)
             .or_default()
             .entry(connection_id)
             .or_default()
@@ -219,7 +220,7 @@ impl Router {
         let _mutation_guard = self
             .mutation_lock
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let filter = {
             let mut connection = self
                 .connections
@@ -239,7 +240,7 @@ impl Router {
         let _mutation_guard = self
             .mutation_lock
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some((_, connection)) = self.connections.remove(&connection_id) else {
             return;
         };
@@ -265,20 +266,33 @@ impl Router {
             }
         }
 
-        let matched_subscriptions = matches.values().map(|ids| ids.len()).sum();
+        let matched_subscriptions = matches.values().map(SmallVec::len).sum();
         let mut report = DispatchReport {
             matched_subscriptions,
             ..DispatchReport::default()
         };
         let mut disconnect = Vec::new();
 
-        for (connection_id, subscription_ids) in matches {
+        let connection_count = matches.len();
+        let mut message = Some(message);
+        for (index, (connection_id, subscription_ids)) in matches.into_iter().enumerate() {
             let Some(mut connection) = self.connections.get_mut(&connection_id) else {
                 report.closed_connections += 1;
                 continue;
             };
+            let delivery_message = if index + 1 == connection_count {
+                message
+                    .take()
+                    .expect("final delivery owns the routed message")
+            } else {
+                Arc::clone(
+                    message
+                        .as_ref()
+                        .expect("routed message remains available before final delivery"),
+                )
+            };
             let delivery = Delivery {
-                message: Arc::clone(&message),
+                message: delivery_message,
                 subscription_ids,
             };
             match connection.sender.try_send(delivery) {
@@ -362,9 +376,7 @@ mod tests {
     use bytes::Bytes;
 
     use super::{Router, RouterConfig};
-    use crate::{
-        DeliveryProtocol, RouteFilter, RoutedMessage, RoutingMetadata, SubscriptionId,
-    };
+    use crate::{DeliveryProtocol, RouteFilter, RoutedMessage, RoutingMetadata, SubscriptionId};
 
     fn filter(tenant: &str, channel: Option<&str>) -> RouteFilter {
         RouteFilter {
@@ -460,9 +472,24 @@ mod tests {
                 filter("tenant-a", None),
             )
             .expect("subscribe");
-        assert_eq!(router.dispatch(message("tenant-a", "news")).delivered_connections, 1);
-        assert_eq!(router.dispatch(message("tenant-a", "news")).full_connections, 1);
-        assert_eq!(router.dispatch(message("tenant-a", "news")).full_connections, 1);
+        assert_eq!(
+            router
+                .dispatch(message("tenant-a", "news"))
+                .delivered_connections,
+            1
+        );
+        assert_eq!(
+            router
+                .dispatch(message("tenant-a", "news"))
+                .full_connections,
+            1
+        );
+        assert_eq!(
+            router
+                .dispatch(message("tenant-a", "news"))
+                .full_connections,
+            1
+        );
         assert_eq!(router.status().active_connections, 0);
     }
 
@@ -474,11 +501,7 @@ mod tests {
             max_subscriptions_per_connection: 10,
             slow_consumer_strikes: 2,
         });
-        let result = router.register_connection(
-            "tenant-a",
-            DeliveryProtocol::WebSocket,
-            Some(9),
-        );
+        let result = router.register_connection("tenant-a", DeliveryProtocol::WebSocket, Some(9));
         assert!(matches!(
             result,
             Err(crate::CoreError::InvalidQueueCapacity {

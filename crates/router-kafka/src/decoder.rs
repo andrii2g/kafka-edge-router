@@ -47,7 +47,14 @@ pub fn decode_message(
 
     let tenant_id = required_header(record, "x-tenant-id")?;
     let message_id = optional_header(record, "x-message-id")?.map_or_else(
-        || format!("{}:{}:{}", record.topic(), record.partition(), record.offset()),
+        || {
+            format!(
+                "{}:{}:{}",
+                record.topic(),
+                record.partition(),
+                record.offset()
+            )
+        },
         str::to_owned,
     );
     let content_type = optional_header(record, "x-content-type")?

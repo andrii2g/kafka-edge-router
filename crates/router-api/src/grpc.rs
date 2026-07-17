@@ -10,11 +10,12 @@ use router_core::{
     Router, SubscriptionId,
 };
 use router_proto::v1::{
-    client_command, kafka_router_server::{KafkaRouter, KafkaRouterServer}, server_event,
-    Ack, ClientCommand, GetStatusRequest, KafkaPosition, MessageEvent, Pong, PublishRequest,
-    PublishResponse, RouteFilter as ProtoRouteFilter, RoutedMessage as ProtoRoutedMessage,
-    RoutingMetadata as ProtoRoutingMetadata, ServerEvent, StatusResponse, SubscribeCommand,
-    SubscribeRequest,
+    client_command,
+    kafka_router_server::{KafkaRouter, KafkaRouterServer},
+    server_event, Ack, ClientCommand, GetStatusRequest, KafkaPosition, MessageEvent, Pong,
+    PublishRequest, PublishResponse, RouteFilter as ProtoRouteFilter,
+    RoutedMessage as ProtoRoutedMessage, RoutingMetadata as ProtoRoutingMetadata, ServerEvent,
+    StatusResponse, SubscribeCommand, SubscribeRequest,
 };
 use tokio::{net::TcpListener, sync::watch};
 use tokio_stream::wrappers::TcpListenerStream;
@@ -46,6 +47,11 @@ struct GrpcService {
 }
 
 type EventStream = Pin<Box<dyn Stream<Item = Result<ServerEvent, Status>> + Send + 'static>>;
+
+enum ConnectInput {
+    Delivery(Delivery),
+    Command(ClientCommand),
+}
 
 #[tonic::async_trait]
 impl KafkaRouter for GrpcService {
@@ -86,11 +92,11 @@ impl KafkaRouter for GrpcService {
                 )?),
             )
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
-        if let Err(error) = self.state.router.subscribe(
-            registration.connection_id,
-            subscription_id,
-            filter,
-        ) {
+        if let Err(error) =
+            self.state
+                .router
+                .subscribe(registration.connection_id, subscription_id, filter)
+        {
             self.state
                 .router
                 .unregister_connection(registration.connection_id);
@@ -104,7 +110,7 @@ impl KafkaRouter for GrpcService {
         let output = try_stream! {
             let _guard = guard;
             while let Some(delivery) = receiver.recv().await {
-                yield proto_delivery(delivery);
+                yield proto_delivery(&delivery);
             }
         };
         Ok(Response::new(Box::pin(output)))
@@ -137,47 +143,53 @@ impl KafkaRouter for GrpcService {
         let output = try_stream! {
             let _guard = guard;
             loop {
-                tokio::select! {
+                let next: Option<Result<ConnectInput, Status>> = tokio::select! {
                     delivery = receiver.recv() => {
-                        let Some(delivery) = delivery else {
-                            break;
-                        };
-                        yield proto_delivery(delivery);
+                        delivery.map(ConnectInput::Delivery).map(Ok)
                     }
                     command = incoming.message() => {
-                        let Some(command) = command? else {
-                            break;
-                        };
-                        match command.command {
-                            Some(client_command::Command::Subscribe(command)) => {
-                                let ack = grpc_subscribe(&router, connection_id, &principal, command)?;
-                                yield ServerEvent {
-                                    event: Some(server_event::Event::Ack(ack)),
-                                };
-                            }
-                            Some(client_command::Command::Unsubscribe(command)) => {
-                                let subscription_id = SubscriptionId::new(command.subscription_id)
-                                    .map_err(|error| Status::invalid_argument(error.to_string()))?;
-                                router
-                                    .unsubscribe(connection_id, &subscription_id)
-                                    .map_err(|error| Status::invalid_argument(error.to_string()))?;
-                                yield ServerEvent {
-                                    event: Some(server_event::Event::Ack(Ack {
-                                        operation: "unsubscribed".to_owned(),
-                                        subscription_id: subscription_id.to_string(),
-                                    })),
-                                };
-                            }
-                            Some(client_command::Command::Ping(ping)) => {
-                                yield ServerEvent {
-                                    event: Some(server_event::Event::Pong(Pong {
-                                        opaque: ping.opaque,
-                                    })),
-                                };
-                            }
-                            None => Err(Status::invalid_argument("command is required"))?,
+                        match command {
+                            Ok(Some(command)) => Some(Ok(ConnectInput::Command(command))),
+                            Ok(None) => None,
+                            Err(error) => Some(Err(error)),
                         }
                     }
+                };
+                let Some(next) = next else {
+                    break;
+                };
+                match next? {
+                    ConnectInput::Delivery(delivery) => yield proto_delivery(&delivery),
+                    ConnectInput::Command(command) => match command.command {
+                        Some(client_command::Command::Subscribe(command)) => {
+                            let ack =
+                                grpc_subscribe(&router, connection_id, &principal, command)?;
+                            yield ServerEvent {
+                                event: Some(server_event::Event::Ack(ack)),
+                            };
+                        }
+                        Some(client_command::Command::Unsubscribe(command)) => {
+                            let subscription_id = SubscriptionId::new(command.subscription_id)
+                                .map_err(|error| Status::invalid_argument(error.to_string()))?;
+                            router
+                                .unsubscribe(connection_id, &subscription_id)
+                                .map_err(|error| Status::invalid_argument(error.to_string()))?;
+                            yield ServerEvent {
+                                event: Some(server_event::Event::Ack(Ack {
+                                    operation: "unsubscribed".to_owned(),
+                                    subscription_id: subscription_id.to_string(),
+                                })),
+                            };
+                        }
+                        Some(client_command::Command::Ping(ping)) => {
+                            yield ServerEvent {
+                                event: Some(server_event::Event::Pong(Pong {
+                                    opaque: ping.opaque,
+                                })),
+                            };
+                        }
+                        None => Err(Status::invalid_argument("command is required"))?,
+                    },
                 }
             }
         };
@@ -311,7 +323,7 @@ fn authorize_tenant(principal: &Principal, requested: Option<&str>) -> Result<()
     Ok(())
 }
 
-fn proto_delivery(delivery: Delivery) -> ServerEvent {
+fn proto_delivery(delivery: &Delivery) -> ServerEvent {
     let metadata = &delivery.message.metadata;
     let source = metadata.source.as_ref().map(|source| KafkaPosition {
         topic: source.topic.to_string(),

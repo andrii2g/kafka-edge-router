@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let ingestor = KafkaIngestor::new(&configuration.kafka.consumer, Arc::clone(&router))
         .context("failed to construct Kafka consumer")?;
-    let webhook_manager = WebhookManager::new(&configuration.webhooks, Arc::clone(&router))
+    let webhook_manager = WebhookManager::new(&configuration.webhooks, &router)
         .context("failed to construct webhook manager")?;
     let api_state = ApiState::new(
         Arc::clone(&router),
@@ -60,12 +60,7 @@ async fn main() -> anyhow::Result<()> {
         configuration.api.clone(),
     );
 
-    let http_listener = TcpListener::bind(&configuration.server.http_addr)
-        .await
-        .with_context(|| format!("failed to bind HTTP listener {}", configuration.server.http_addr))?;
-    let grpc_listener = TcpListener::bind(&configuration.server.grpc_addr)
-        .await
-        .with_context(|| format!("failed to bind gRPC listener {}", configuration.server.grpc_addr))?;
+    let (http_listener, grpc_listener) = bind_listeners(&configuration).await?;
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut tasks: JoinSet<(&'static str, anyhow::Result<()>)> = JoinSet::new();
@@ -129,26 +124,60 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    let grace = Duration::from_secs(configuration.server.shutdown_grace_secs.max(1));
+    drain_components(&health, shutdown_tx, tasks, grace).await;
+    Ok(())
+}
+
+async fn bind_listeners(configuration: &AppConfig) -> anyhow::Result<(TcpListener, TcpListener)> {
+    let http_listener = TcpListener::bind(&configuration.server.http_addr)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to bind HTTP listener {}",
+                configuration.server.http_addr
+            )
+        })?;
+    let grpc_listener = TcpListener::bind(&configuration.server.grpc_addr)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to bind gRPC listener {}",
+                configuration.server.grpc_addr
+            )
+        })?;
+    Ok((http_listener, grpc_listener))
+}
+
+async fn drain_components(
+    health: &HealthState,
+    shutdown_tx: watch::Sender<bool>,
+    mut tasks: JoinSet<(&'static str, anyhow::Result<()>)>,
+    grace: Duration,
+) {
     health.set_ready(false);
     let _ = shutdown_tx.send(true);
-    let grace = Duration::from_secs(configuration.server.shutdown_grace_secs.max(1));
     let drained = timeout(grace, async {
         while let Some(result) = tasks.join_next().await {
             match result {
                 Ok((name, Ok(()))) => info!(component = name, "component stopped"),
-                Ok((name, Err(error))) => error!(component = name, %error, "component stopped with error"),
+                Ok((name, Err(error))) => {
+                    error!(component = name, %error, "component stopped with error");
+                }
                 Err(error) => error!(%error, "component task failed during shutdown"),
             }
         }
     })
     .await;
     if drained.is_err() {
-        warn!(grace_seconds = grace.as_secs(), "shutdown deadline reached; aborting tasks");
+        warn!(
+            grace_seconds = grace.as_secs(),
+            "shutdown deadline reached; aborting tasks"
+        );
         tasks.abort_all();
     }
     health.set_live(false);
     info!("router stopped");
-    Ok(())
 }
 
 fn init_tracing(configuration: &AppConfig) {
@@ -170,9 +199,8 @@ fn init_tracing(configuration: &AppConfig) {
 async fn shutdown_signal() -> anyhow::Result<&'static str> {
     #[cfg(unix)]
     {
-        let mut terminate = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate(),
-        )?;
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         tokio::select! {
             result = tokio::signal::ctrl_c() => {
                 result?;

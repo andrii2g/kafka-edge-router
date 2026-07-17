@@ -20,9 +20,9 @@ Legend: **implemented**, **scaffolded**, **planned**, **not planned**.
 | Webhook volatile retries and HMAC | implemented | `router-webhook/manager.rs` |
 | Health/readiness/status/metrics | implemented | `router-api` |
 | SIGINT/SIGTERM graceful shutdown | implemented | `routerd/main.rs` |
-| Local Kafka and deployment files | scaffolded | structurally validated; runtime validation in task 000/010 |
-| Compile against pinned dependency APIs | scaffolded | task 000 |
-| Committed `Cargo.lock` | planned | task 000 |
+| Local Kafka and deployment files | scaffolded | repository validation passed; Docker/runtime checks await an installed Docker CLI and task 010 |
+| Compile against pinned dependency APIs | implemented | Rust 1.88 check, Clippy, tests, config checks, and release build pass |
+| Committed `Cargo.lock` | implemented | root `Cargo.lock`; CI, Docker, Make, and release builds use `--locked` |
 | Serialized route-index mutation and safe empty-bucket cleanup | implemented | `router-core/router.rs` |
 | Route-index concurrency/property proof | planned | task 001 |
 | Kafka rebalance/commit integration suite | planned | task 002 |

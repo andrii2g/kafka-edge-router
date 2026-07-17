@@ -111,7 +111,7 @@ production operators should decide whether to hash or omit it from exported tele
 ## Dependency and supply-chain controls
 
 CI includes formatting, Clippy, tests, dependency audit, and container build workflows.
-Task 000 generates and commits `Cargo.lock`. Pin GitHub Actions to immutable commit SHAs
+The committed `Cargo.lock` is enforced with `--locked`. Pin GitHub Actions to immutable commit SHAs
 before a high-assurance release. Produce an SBOM and signed image provenance in task 010.
 
 ## Vulnerability reporting

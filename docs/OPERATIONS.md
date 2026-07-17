@@ -106,7 +106,7 @@ and sends SIGTERM. Install configuration under `/etc/rust-kafka-edge-router/rout
 ### Container
 
 The Dockerfile uses a Rust build stage and a slim non-root runtime. Generate and commit
-`Cargo.lock` in task 000, then switch build commands to `--locked` for reproducibility.
+The committed `Cargo.lock` is enforced with `--locked` for reproducible builds.
 
 ## Rolling upgrades
 

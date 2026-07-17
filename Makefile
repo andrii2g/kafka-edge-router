@@ -10,19 +10,19 @@ fmt: ## Format all Rust crates
 	cargo fmt --all
 
 lint: ## Run Clippy with warnings denied
-	cargo clippy --workspace --all-targets --all-features -- -D warnings
+	cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
 test: ## Run the workspace test suite
-	cargo test --workspace --all-features
+	cargo test --locked --workspace --all-features
 
 check: ## Type-check every target
-	cargo check --workspace --all-targets --all-features
+	cargo check --locked --workspace --all-targets --all-features
 
 build: ## Build the release daemon
-	cargo build --release --bin routerd
+	cargo build --locked --release --bin routerd
 
 run: ## Run the local configuration
-	cargo run -p routerd -- --config config/router.toml
+	cargo run --locked -p routerd -- --config config/router.toml
 
 kafka-up: ## Start local Kafka
 	docker compose up -d kafka
