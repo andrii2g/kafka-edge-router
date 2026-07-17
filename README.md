@@ -1,7 +1,12 @@
-# rust-kafka-edge-router
+# Rust Kafka Edge Router
 
-A low-latency Rust daemon that consumes Kafka records and routes them to filtered
+High-performance and low-latency Rust daemon that consumes Kafka records and routes them to filtered
 WebSocket, Server-Sent Events, gRPC, and outbound HTTP webhook subscribers.
+
+[![CI](https://github.com/andrii2g/rust-kafka-edge-router/actions/workflows/ci.yml/badge.svg)](https://github.com/andrii2g/rust-kafka-edge-router/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org/)
+
 
 ```text
                          ┌─────────────────────────────┐
@@ -21,7 +26,7 @@ WebSocket, Server-Sent Events, gRPC, and outbound HTTP webhook subscribers.
               ┌─────────────────────────┼────────────────────────┐
               │                         │                        │
      ┌────────▼────────┐      ┌─────────▼────────┐     ┌────────▼─────────┐
-     │ bounded live    │      │ bounded webhook │     │ status / metrics │
+     │ bounded live    │      │ bounded webhook  │     │ status / metrics │
      │ connection hub  │      │ workers          │     │ and publish API  │
      └───────┬─────────┘      └─────────┬────────┘     └──────────────────┘
              │                          │
@@ -366,10 +371,5 @@ These are tracked rather than hidden:
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0; or
-- MIT License.
-
-at your option.
+- Apache License, Version 2.0;
 
