@@ -1,0 +1,55 @@
+[server]
+http_addr = "0.0.0.0:8080"
+grpc_addr = "0.0.0.0:9090"
+shutdown_grace_secs = 10
+
+[api]
+http_body_limit_bytes = 1048576
+stream_queue_capacity = 256
+max_stream_queue_capacity = 4096
+sse_keep_alive_secs = 15
+
+[router]
+default_queue_capacity = 256
+max_queue_capacity = 4096
+max_subscriptions_per_connection = 128
+slow_consumer_strikes = 3
+
+# Development-only mode. Production should use static_bearer or trusted_header.
+[auth]
+mode = "disabled"
+default_tenant = "tenant-demo"
+tenant_header = "x-tenant-id"
+bearer_tokens = {}
+
+[kafka.consumer]
+brokers = "localhost:9092"
+group_id = "rust-kafka-edge-router-local"
+client_id = "rust-kafka-edge-router-consumer"
+topics = ["router.input"]
+auto_offset_reset = "earliest"
+max_payload_bytes = 1048576
+commit_invalid_messages = true
+
+[kafka.consumer.properties]
+"session.timeout.ms" = "45000"
+"heartbeat.interval.ms" = "3000"
+
+[kafka.producer]
+enabled = true
+brokers = "localhost:9092"
+client_id = "rust-kafka-edge-router-producer"
+topic = "router.input"
+delivery_timeout_ms = 10000
+
+[kafka.producer.properties]
+"compression.type" = "lz4"
+"linger.ms" = "2"
+
+[webhooks]
+enabled = false
+destinations = []
+
+[logging]
+filter = "routerd=info,router_core=debug,router_kafka=info,router_api=info,router_webhook=info"
+json = false

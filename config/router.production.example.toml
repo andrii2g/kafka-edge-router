@@ -1,0 +1,80 @@
+[server]
+http_addr = "0.0.0.0:8080"
+grpc_addr = "0.0.0.0:9090"
+shutdown_grace_secs = 30
+
+[api]
+http_body_limit_bytes = 1048576
+stream_queue_capacity = 512
+max_stream_queue_capacity = 8192
+sse_keep_alive_secs = 15
+
+[router]
+default_queue_capacity = 512
+max_queue_capacity = 8192
+max_subscriptions_per_connection = 256
+slow_consumer_strikes = 3
+
+# Replace opaque values through a secret-mounted file or environment overlay.
+[auth]
+mode = "static_bearer"
+tenant_header = "x-tenant-id"
+bearer_tokens = { "REPLACE_TOKEN_TENANT_A" = "tenant-a", "REPLACE_TOKEN_TENANT_B" = "tenant-b" }
+
+[kafka.consumer]
+brokers = "kafka-0.kafka:9092,kafka-1.kafka:9092,kafka-2.kafka:9092"
+# Each router pod must use a unique group id in the MVP full-stream topology.
+group_id = "router-REPLACE_NODE_ID"
+client_id = "rust-kafka-edge-router"
+topics = ["router.input"]
+auto_offset_reset = "latest"
+max_payload_bytes = 1048576
+commit_invalid_messages = true
+
+[kafka.consumer.properties]
+"security.protocol" = "SASL_SSL"
+"sasl.mechanism" = "SCRAM-SHA-512"
+"sasl.username" = "REPLACE"
+"sasl.password" = "REPLACE"
+"enable.partition.eof" = "false"
+
+[kafka.producer]
+enabled = true
+brokers = "kafka-0.kafka:9092,kafka-1.kafka:9092,kafka-2.kafka:9092"
+client_id = "rust-kafka-edge-router-producer"
+topic = "router.input"
+delivery_timeout_ms = 10000
+
+[kafka.producer.properties]
+"security.protocol" = "SASL_SSL"
+"sasl.mechanism" = "SCRAM-SHA-512"
+"sasl.username" = "REPLACE"
+"sasl.password" = "REPLACE"
+"compression.type" = "lz4"
+"linger.ms" = "2"
+
+[webhooks]
+enabled = true
+
+[[webhooks.destinations]]
+id = "tenant-a-news"
+url = "https://events.example.com/router"
+queue_capacity = 1024
+timeout_ms = 5000
+max_attempts = 5
+initial_backoff_ms = 250
+max_backoff_ms = 30000
+signing_secret = "REPLACE_WEBHOOK_SECRET"
+allowed_hosts = ["events.example.com"]
+allow_private_ips = false
+allow_http = false
+headers = { "x-environment" = "production" }
+
+[webhooks.destinations.filter]
+tenant_id = "tenant-a"
+kind = "content"
+channel = "news"
+
+[logging]
+filter = "routerd=info,router_core=info,router_kafka=info,router_api=info,router_webhook=info"
+json = true

@@ -1,0 +1,133 @@
+syntax = "proto3";
+
+package router.v1;
+
+service KafkaRouter {
+  rpc Subscribe(SubscribeRequest) returns (stream ServerEvent);
+  rpc Connect(stream ClientCommand) returns (stream ServerEvent);
+  rpc Publish(PublishRequest) returns (PublishResponse);
+  rpc GetStatus(GetStatusRequest) returns (StatusResponse);
+}
+
+message RouteFilter {
+  string tenant_id = 1;
+  optional string kind = 2;
+  optional string type = 3;
+  optional string channel = 4;
+  optional string actor_id = 5;
+  optional string audience_type = 6;
+  optional string audience_id = 7;
+}
+
+message SubscribeRequest {
+  string subscription_id = 1;
+  RouteFilter filter = 2;
+  optional uint32 queue_capacity = 3;
+}
+
+message SubscribeCommand {
+  string subscription_id = 1;
+  RouteFilter filter = 2;
+}
+
+message UnsubscribeCommand {
+  string subscription_id = 1;
+}
+
+message Ping {
+  string opaque = 1;
+}
+
+message ClientCommand {
+  oneof command {
+    SubscribeCommand subscribe = 1;
+    UnsubscribeCommand unsubscribe = 2;
+    Ping ping = 3;
+  }
+}
+
+message Ack {
+  string operation = 1;
+  string subscription_id = 2;
+}
+
+message Pong {
+  string opaque = 1;
+}
+
+message ErrorEvent {
+  string code = 1;
+  string message = 2;
+}
+
+message KafkaPosition {
+  string topic = 1;
+  int32 partition = 2;
+  int64 offset = 3;
+}
+
+message RoutingMetadata {
+  string message_id = 1;
+  string tenant_id = 2;
+  optional string kind = 3;
+  optional string type = 4;
+  optional string channel = 5;
+  optional string actor_id = 6;
+  optional string audience_type = 7;
+  optional string audience_id = 8;
+  string content_type = 9;
+  optional int64 timestamp_ms = 10;
+  KafkaPosition source = 11;
+}
+
+message RoutedMessage {
+  RoutingMetadata metadata = 1;
+  bytes payload = 2;
+}
+
+message MessageEvent {
+  repeated string subscription_ids = 1;
+  RoutedMessage message = 2;
+}
+
+message ServerEvent {
+  oneof event {
+    MessageEvent message = 1;
+    Ack ack = 2;
+    Pong pong = 3;
+    ErrorEvent error = 4;
+  }
+}
+
+message PublishRequest {
+  optional string message_id = 1;
+  string tenant_id = 2;
+  optional string kind = 3;
+  optional string type = 4;
+  optional string channel = 5;
+  optional string actor_id = 6;
+  optional string audience_type = 7;
+  optional string audience_id = 8;
+  string content_type = 9;
+  bytes payload = 10;
+}
+
+message PublishResponse {
+  string message_id = 1;
+  string topic = 2;
+  int32 partition = 3;
+  int64 offset = 4;
+}
+
+message GetStatusRequest {}
+
+message StatusResponse {
+  bool ready = 1;
+  uint64 active_connections = 2;
+  uint64 subscriptions = 3;
+  uint64 kafka_messages = 4;
+  uint64 valid_messages = 5;
+  uint64 invalid_messages = 6;
+  uint64 delivered_connections = 7;
+  uint64 dropped_connections = 8;
+}

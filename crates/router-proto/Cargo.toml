@@ -1,0 +1,20 @@
+[package]
+name = "router-proto"
+version.workspace = true
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+description = "Protocol Buffer contracts for rust-kafka-edge-router"
+build = "build.rs"
+
+[dependencies]
+prost.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+
+[build-dependencies]
+protoc-bin-vendored.workspace = true
+tonic-prost-build.workspace = true
+
+[lints]
+workspace = true
