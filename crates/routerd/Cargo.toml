@@ -1,0 +1,27 @@
+[package]
+name = "routerd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "High-performance Kafka edge router daemon"
+
+[[bin]]
+name = "routerd"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+config.workspace = true
+router-api = { path = "../router-api" }
+router-core = { path = "../router-core" }
+router-kafka = { path = "../router-kafka" }
+router-webhook = { path = "../router-webhook" }
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
