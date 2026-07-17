@@ -1,0 +1,10 @@
+/target/
+.env
+*.log
+*.pid
+.DS_Store
+.idea/
+.vscode/
+coverage/
+*.profraw
+*.profdata
