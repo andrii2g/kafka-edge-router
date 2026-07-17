@@ -10,6 +10,10 @@ All notable changes will be documented here. The project follows Semantic Versio
 
 ### Changed
 
+- Updated GitHub Actions to Node 24-compatible checkout and replaced the Node 20
+  RustSec action with a locked `cargo-audit 0.22.2` installation.
+- Installed libcurl development headers in Linux CI, release, and container builds for
+  the vendored librdkafka build.
 - Adapted route candidate inference, Kafka producer delivery receipts, protobuf generation,
   gRPC stream error propagation, and warning-level API drift to the locked dependency APIs.
 - Enforced `--locked` in CI, release, Docker, and standard Make build commands.
@@ -25,6 +29,8 @@ All notable changes will be documented here. The project follows Semantic Versio
 - Passed `cargo test --locked --doc --workspace`: five crates, no doctests defined.
 - Passed both `routerd --check-config` commands for the local and production example TOML.
 - Passed `cargo build --locked --release --bin routerd`.
+- Passed locked installation of `cargo-audit 0.22.2` under Rust 1.88 and
+  `cargo audit` with 305 locked dependencies scanned.
 - Passed `python scripts/validate-repo.py`: 118 files, 29 Rust, 12 TOML, 15 YAML,
   and 39 Markdown files validated.
 - `docker build --pull -t rust-kafka-edge-router:task-000 .` was attempted but could
