@@ -145,7 +145,35 @@ validation, hash-map updates, match collection, sender cloning/state updates, or
 Registration and unregistration paths must remain idempotent. Protocol adapters use an
 RAII guard so cancellation or an early socket error removes subscriptions.
 
-Task 001 strengthens subscription/unsubscription race tests and route-bucket cleanup.
+Task 001 proves subscription/unsubscription races and route-bucket cleanup with
+barrier-coordinated tests. One process-wide mutation mutex establishes a total order for
+subscribe, unsubscribe, and unregister operations. Empty-bucket cleanup runs before that
+mutex is released, so another mutation cannot repopulate a key between the emptiness check
+and removal. Dispatch does not take the mutation mutex: a dispatch that collected a match
+before unsubscribe linearized may enqueue one final in-flight delivery. No later dispatch
+can rediscover the removed route.
+
+The concurrency tests use barriers rather than timing sleeps and are compatible with
+ThreadSanitizer. On an x86-64 Linux nightly toolchain, run:
+
+```bash
+RUSTFLAGS="-Zsanitizer=thread" cargo +nightly test -Zbuild-std \
+  --target x86_64-unknown-linux-gnu -p router-core
+```
+
+Loom was evaluated but not selected. It cannot instrument `DashMap` or the production
+`std::sync::Mutex`; replacing both with model-only structures would test a second
+implementation rather than this route index. Miri was also evaluated but is not used as
+the concurrency proof: the repository denies unsafe code, the tests exercise real OS
+threads and third-party synchronization, and the pinned stable toolchain does not include
+the nightly-only Miri component. The barrier tests are therefore the primary deterministic
+proof, with ThreadSanitizer as the dynamic race-checking path.
+
+The remaining contention risk is subscription churn: every route mutation serializes on
+one mutex, including unrelated tenants and route keys. Dispatch does not acquire that
+mutex and remains proportional to candidate keys plus matches. Measure mutation wait time
+under connection churn before considering a route-index actor or finer-grained design; any
+replacement must retain the cleanup and atomicity tests.
 
 ## Backpressure model
 
@@ -162,14 +190,46 @@ strike threshold       -> unregister connection
 queue closed           -> unregister connection
 ```
 
-This policy favors low-latency current data over retaining an unbounded backlog. Durable
-delivery requires a different persisted mode and cannot be added invisibly.
+This policy favors low-latency current data over retaining an unbounded backlog. At the
+core API boundary, `slow_consumer_strikes` values zero and one both disconnect on the first
+full-queue outcome; daemon configuration rejects zero so production configuration remains
+explicit. Durable delivery requires a different persisted mode and cannot be added
+invisibly.
 
 Possible future policies should be explicit per subscription:
 
 - `live`: current best-effort behavior;
 - `latest`: coalesce by entity and keep only newest state;
 - `durable`: persisted consumer cursor and acknowledgements.
+
+## Routing benchmarks
+
+Task 001 provides Criterion coverage for fully populated candidate generation, unmatched
+dispatch, and accepted fan-out to 1, 32, and 256 bounded receivers. Run and save a named
+baseline with:
+
+```bash
+cargo bench -p router-core --bench matcher -- --save-baseline task-001
+```
+
+Record benchmark results with enough context to compare runs:
+
+```text
+date_utc: <ISO-8601>
+git_commit: <full SHA>
+rustc: <rustc -Vv>
+target: <target triple>
+os: <name and version>
+cpu: <model and logical-core count>
+profile: bench
+benchmark: <Criterion benchmark id>
+time: <lower, estimate, upper with units>
+throughput: <lower, estimate, upper elements/second when reported>
+baseline: task-001
+```
+
+Criterion writes detailed estimates below `target/criterion`; generated benchmark output
+is not committed. Compare only runs with equivalent hardware, toolchain, and load.
 
 ## Encoding
 

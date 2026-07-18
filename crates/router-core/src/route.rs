@@ -142,58 +142,131 @@ impl RouteKey {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::HashSet, sync::Arc};
 
     use super::{RouteFilter, RouteKey};
     use crate::RoutingMetadata;
 
-    fn metadata() -> RoutingMetadata {
+    const OPTIONAL_DIMENSIONS: u32 = 6;
+
+    fn optional(mask: u32, bit: u32, value: &'static str) -> Option<Arc<str>> {
+        (mask & (1 << bit) != 0).then(|| Arc::from(value))
+    }
+
+    fn metadata_for_mask(mask: u32, tenant: &str) -> RoutingMetadata {
         RoutingMetadata {
             message_id: Arc::from("m-1"),
-            tenant_id: Arc::from("tenant-a"),
-            kind: Some(Arc::from("content")),
-            message_type: Some(Arc::from("broadcast")),
-            channel: Some(Arc::from("news")),
-            actor_id: Some(Arc::from("u-1")),
-            audience_type: Some(Arc::from("team")),
-            audience_id: Some(Arc::from("team-7")),
+            tenant_id: Arc::from(tenant),
+            kind: optional(mask, 0, "content"),
+            message_type: optional(mask, 1, "broadcast"),
+            channel: optional(mask, 2, "news"),
+            actor_id: optional(mask, 3, "u-1"),
+            audience_type: optional(mask, 4, "team"),
+            audience_id: optional(mask, 5, "team-7"),
             content_type: Arc::from("application/json"),
             timestamp_ms: None,
             source: None,
         }
     }
 
-    #[test]
-    fn creates_all_exact_and_wildcard_candidates() {
-        let candidates = RouteKey::candidates(&metadata());
-        assert_eq!(candidates.len(), 64);
+    fn filter_for_mask(mask: u32, tenant: &str) -> RouteFilter {
+        RouteFilter {
+            tenant_id: Arc::from(tenant),
+            kind: optional(mask, 0, "content"),
+            message_type: optional(mask, 1, "broadcast"),
+            channel: optional(mask, 2, "news"),
+            actor_id: optional(mask, 3, "u-1"),
+            audience_type: optional(mask, 4, "team"),
+            audience_id: optional(mask, 5, "team-7"),
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0
+        }
     }
 
     #[test]
-    fn wildcard_filter_matches_reference_matcher() {
-        let filter = RouteFilter {
-            tenant_id: Arc::from("tenant-a"),
-            kind: Some(Arc::from("content")),
-            message_type: None,
-            channel: Some(Arc::from("news")),
-            actor_id: None,
-            audience_type: None,
-            audience_id: None,
-        };
-        assert!(filter.matches(&metadata()));
+    fn indexed_candidates_match_reference_for_every_dimension_combination() {
+        for message_mask in 0..(1 << OPTIONAL_DIMENSIONS) {
+            let metadata = metadata_for_mask(message_mask, "tenant-a");
+            let candidates = RouteKey::candidates(&metadata);
+            for filter_mask in 0..(1 << OPTIONAL_DIMENSIONS) {
+                let filter = filter_for_mask(filter_mask, "tenant-a");
+                let indexed = candidates.contains(&RouteKey::from(&filter));
+                assert_eq!(
+                    indexed,
+                    filter.matches(&metadata),
+                    "message mask {message_mask:06b}, filter mask {filter_mask:06b}"
+                );
+            }
+        }
     }
 
     #[test]
-    fn tenant_boundary_never_wildcards() {
-        let filter = RouteFilter {
-            tenant_id: Arc::from("tenant-b"),
-            kind: None,
-            message_type: None,
-            channel: None,
-            actor_id: None,
-            audience_type: None,
-            audience_id: None,
-        };
-        assert!(!filter.matches(&metadata()));
+    fn candidate_count_and_uniqueness_hold_for_every_message_shape() {
+        for mask in 0..(1 << OPTIONAL_DIMENSIONS) {
+            let metadata = metadata_for_mask(mask, "tenant-a");
+            let candidates = RouteKey::candidates(&metadata);
+            let unique: HashSet<_> = candidates.iter().collect();
+            assert_eq!(candidates.len(), 1 << mask.count_ones());
+            assert_eq!(unique.len(), candidates.len(), "mask {mask:06b}");
+            assert!(
+                candidates
+                    .iter()
+                    .all(|candidate| candidate.tenant_id == metadata.tenant_id),
+                "tenant must never branch for mask {mask:06b}"
+            );
+        }
+    }
+
+    #[test]
+    fn randomized_index_equivalence_and_tenant_isolation() {
+        let mut random = Lcg(0x5eed_cafe_f00d_beef);
+        for case in 0..10_000 {
+            let message_mask = (random.next() & 0x3f) as u32;
+            let filter_mask = (random.next() & 0x3f) as u32;
+            let same_tenant = random.next() & 1 == 0;
+            let metadata = metadata_for_mask(message_mask, "tenant-a");
+            let mut filter = filter_for_mask(
+                filter_mask,
+                if same_tenant { "tenant-a" } else { "tenant-b" },
+            );
+
+            if random.next() % 4 == 0 {
+                match random.next() % u64::from(OPTIONAL_DIMENSIONS) {
+                    0 if filter.kind.is_some() => filter.kind = Some(Arc::from("other")),
+                    1 if filter.message_type.is_some() => {
+                        filter.message_type = Some(Arc::from("other"));
+                    }
+                    2 if filter.channel.is_some() => filter.channel = Some(Arc::from("other")),
+                    3 if filter.actor_id.is_some() => filter.actor_id = Some(Arc::from("other")),
+                    4 if filter.audience_type.is_some() => {
+                        filter.audience_type = Some(Arc::from("other"));
+                    }
+                    5 if filter.audience_id.is_some() => {
+                        filter.audience_id = Some(Arc::from("other"));
+                    }
+                    _ => {}
+                }
+            }
+
+            let candidates = RouteKey::candidates(&metadata);
+            let indexed = candidates.contains(&RouteKey::from(&filter));
+            assert_eq!(indexed, filter.matches(&metadata), "random case {case}");
+            if !same_tenant {
+                assert!(!indexed, "cross-tenant candidate in random case {case}");
+            }
+            let unique: HashSet<_> = candidates.iter().collect();
+            assert_eq!(unique.len(), candidates.len(), "random case {case}");
+        }
     }
 }

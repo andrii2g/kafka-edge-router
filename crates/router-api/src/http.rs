@@ -20,7 +20,7 @@ use futures_util::{SinkExt, StreamExt};
 use http::{header, HeaderMap, StatusCode};
 use router_core::{
     encode_delivery_json, render_prometheus, ConnectionId, DeliveryProtocol, PublishCommand,
-    PublishErrorKind, RouteFilter, Router, SubscriptionId,
+    PublishErrorKind, RouteFilter, SubscriptionId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -28,7 +28,7 @@ use tokio::{net::TcpListener, sync::watch};
 use tower_http::{catch_panic::CatchPanicLayer, limit::RequestBodyLimitLayer, trace::TraceLayer};
 use tracing::{debug, warn};
 
-use crate::{ApiError, ApiState, Principal};
+use crate::{state::ConnectionGuard, ApiError, ApiState, Principal};
 
 /// Builds the complete public HTTP application.
 pub fn http_router(state: ApiState) -> AxumRouter {
@@ -458,14 +458,9 @@ async fn sse(
 }
 
 fn stream_queue_capacity(state: &ApiState, requested: Option<usize>) -> Result<usize, ApiError> {
-    let capacity = requested.unwrap_or(state.config.stream_queue_capacity);
-    if capacity == 0 || capacity > state.config.max_stream_queue_capacity {
-        return Err(ApiError::BadRequest(format!(
-            "queue_capacity must be between 1 and {}",
-            state.config.max_stream_queue_capacity
-        )));
-    }
-    Ok(capacity)
+    crate::state::resolve_stream_queue_capacity(&state.config, requested).map_err(|maximum| {
+        ApiError::BadRequest(format!("queue_capacity must be between 1 and {maximum}"))
+    })
 }
 
 fn authorize_requested_tenant(
@@ -479,24 +474,4 @@ fn authorize_requested_tenant(
         return Err(ApiError::Forbidden);
     }
     Ok(())
-}
-
-struct ConnectionGuard {
-    router: Arc<Router>,
-    connection_id: ConnectionId,
-}
-
-impl ConnectionGuard {
-    fn new(router: Arc<Router>, connection_id: ConnectionId) -> Self {
-        Self {
-            router,
-            connection_id,
-        }
-    }
-}
-
-impl Drop for ConnectionGuard {
-    fn drop(&mut self) {
-        self.router.unregister_connection(self.connection_id);
-    }
 }
