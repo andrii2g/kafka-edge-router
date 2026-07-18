@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
-.PHONY: help fmt lint test check build run kafka-up kafka-down topic smoke validate docker
+.PHONY: help fmt lint test test-kafka check build run kafka-up kafka-down topic smoke validate docker
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -14,6 +14,9 @@ lint: ## Run Clippy with warnings denied
 
 test: ## Run the workspace test suite
 	cargo test --locked --workspace --all-features
+
+test-kafka: ## Run isolated broker-backed Kafka integration tests
+	./scripts/test-kafka.sh
 
 check: ## Type-check every target
 	cargo check --locked --workspace --all-targets --all-features

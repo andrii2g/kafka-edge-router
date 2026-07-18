@@ -25,8 +25,18 @@ router-to-live-client delivery is best effort.
 
 Invalid records are committed when `commit_invalid_messages = true`. This prevents a
 poison record from looping forever but means correction requires republishing or replay
-from a separate remediation process. Production deployments should alert on invalid
-record counters and retain enough source data to diagnose them.
+from a separate remediation process. When the setting is `false`, the consumer stops at
+the malformed record. Stopping is required because Kafka commits are cumulative within a
+partition: processing and committing a later record would otherwise skip the poison
+record despite the configured policy. The daemon treats this component exit as a failure.
+
+Production deployments should alert on invalid-record and commit-error counters and retain
+enough source data to diagnose them. A quarantine topic is an optional operational
+extension, not an automatic router behavior: a remediation process may copy the original
+key, value, headers, source coordinates, decode error category, and first-seen timestamp
+to a restricted-retention topic. It must preserve `x-message-id` when present, avoid
+logging payloads, and publish successfully before the source offset is committed. That
+workflow is at least once and quarantine consumers must deduplicate.
 
 ### Kafka configuration invariants
 

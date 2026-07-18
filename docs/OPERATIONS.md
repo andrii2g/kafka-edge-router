@@ -46,6 +46,8 @@ Current counters:
 ```text
 router_kafka_messages_total
 router_kafka_bytes_total
+router_kafka_commit_errors_total
+router_kafka_rebalances_total{event=\"assignment|revocation|error\"}
 router_messages_valid_total
 router_messages_invalid_total
 router_messages_unmatched_total
@@ -63,7 +65,7 @@ router_webhook_failures_total
 ```
 
 Task 008 adds histograms for decode, match, enqueue, wire write, and end-to-end timestamp
-latency, plus consumer lag and rebalance counters.
+latency, plus consumer lag.
 
 ## Suggested alerts
 
