@@ -14,6 +14,44 @@ When assigned an implementation task:
 - Ask only when blocked by missing credentials, an irreversible/destructive operation, deployment or publication, remote mutations, material cost, or genuinely unknowable business requirements.
 - Never ask "Should I proceed?", "Should I build?", or "Should I run tests?" when those actions are necessary to complete the requested task.
 
+## WSL command execution
+
+The Codex agent runs in Windows native mode.
+
+The repository-local WSL distribution variable is:
+
+```text
+WSL_DISTRIBUTION=Ubuntu-24.04
+```
+
+Users may change this value to the name of their installed WSL distribution. Read the configured value from this section and substitute it for `<WSL_DISTRIBUTION>` in the commands below.
+
+When Linux tooling is required, execute it through WSL using:
+
+```powershell
+wsl --distribution <WSL_DISTRIBUTION> -- bash -lc "<command>"
+```
+
+Use the following path translation:
+
+- Windows repository path: `C:\github\<repository>`
+- WSL repository path: `/mnt/c/github/<repository>`
+
+Do not ask for confirmation before executing ordinary, non-destructive WSL commands
+needed to inspect, build, lint, or test the project.
+
+Prefer one complete WSL command rather than many small calls.
+
+Examples:
+
+```powershell
+wsl --distribution <WSL_DISTRIBUTION> -- bash -lc `
+  "cd /mnt/c/github/project && cargo fmt --check && cargo test"
+
+wsl --distribution <WSL_DISTRIBUTION> -- bash -lc `
+  "cd /mnt/c/github/project && dotnet build && dotnet test"
+```
+
 ## Mission
 
 Implement and harden a low-latency Kafka edge router without compromising tenant

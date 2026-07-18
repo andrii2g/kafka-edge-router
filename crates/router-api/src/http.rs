@@ -21,7 +21,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
-use http::{header, HeaderMap, StatusCode};
+use http::{header, HeaderMap, HeaderValue, StatusCode};
 use router_core::{
     encode_delivery_json, render_prometheus, ConnectionId, CoreError, DeliveryProtocol,
     PublishCommand, PublishErrorKind, RouteFilter, SubscriptionId,
@@ -502,31 +502,65 @@ impl FilterInput {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SseQuery {
-    #[serde(flatten)]
-    filter: FilterInput,
+    #[serde(default)]
+    tenant_id: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default, rename = "type")]
+    message_type: Option<String>,
+    #[serde(default)]
+    channel: Option<String>,
+    #[serde(default)]
+    actor_id: Option<String>,
+    #[serde(default)]
+    audience_type: Option<String>,
+    #[serde(default)]
+    audience_id: Option<String>,
     #[serde(default)]
     subscription_id: Option<String>,
     #[serde(default)]
     queue_capacity: Option<usize>,
 }
 
+impl SseQuery {
+    fn into_filter(
+        self,
+        principal: &Principal,
+    ) -> Result<(RouteFilter, String, Option<usize>), ApiError> {
+        let filter = FilterInput {
+            tenant_id: self.tenant_id,
+            kind: self.kind,
+            message_type: self.message_type,
+            channel: self.channel,
+            actor_id: self.actor_id,
+            audience_type: self.audience_type,
+            audience_id: self.audience_id,
+        }
+        .into_filter(principal)?;
+        Ok((
+            filter,
+            self.subscription_id
+                .unwrap_or_else(|| "sse-default".to_owned()),
+            self.queue_capacity,
+        ))
+    }
+}
+
 async fn sse(
     State(state): State<ApiState>,
     headers: HeaderMap,
     Query(query): Query<SseQuery>,
-) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, ApiError> {
+) -> Result<Response, ApiError> {
     let principal = state
         .authenticator
-        .authenticate_http(&headers, query.filter.tenant_id.as_deref())?;
-    let filter = query.filter.into_filter(&principal)?;
-    let subscription_id = SubscriptionId::new(
-        query
-            .subscription_id
-            .unwrap_or_else(|| "sse-default".to_owned()),
-    )
-    .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let queue_capacity = stream_queue_capacity(&state, query.queue_capacity)?;
+        .authenticate_http(&headers, query.tenant_id.as_deref())?;
+    parse_last_event_id(&headers)?;
+    let (filter, subscription_id, requested_queue_capacity) = query.into_filter(&principal)?;
+    let subscription_id = SubscriptionId::new(subscription_id)
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    let queue_capacity = stream_queue_capacity(&state, requested_queue_capacity)?;
     let registration = state
         .router
         .register_connection(
@@ -562,15 +596,38 @@ async fn sse(
                 _ => "message".to_owned(),
             };
             let data = String::from_utf8_lossy(&encode_delivery_json(&delivery)).into_owned();
-            yield Ok(Event::default().id(message_id).event(event_name).data(data));
+            yield Ok::<Event, Infallible>(Event::default().id(message_id).event(event_name).data(data));
         }
     };
 
-    Ok(Sse::new(output).keep_alive(
-        KeepAlive::new()
-            .interval(Duration::from_secs(state.config.sse_keep_alive_secs.max(1)))
-            .text("keep-alive"),
-    ))
+    let mut response = Sse::new(output)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(state.config.sse_keep_alive_secs.max(1)))
+                .text("keep-alive"),
+        )
+        .into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-transform"),
+    );
+    response
+        .headers_mut()
+        .insert("x-accel-buffering", HeaderValue::from_static("no"));
+    response
+        .headers_mut()
+        .insert("x-sse-replay", HeaderValue::from_static("unsupported"));
+    Ok(response)
+}
+
+fn parse_last_event_id(headers: &HeaderMap) -> Result<(), ApiError> {
+    let Some(value) = headers.get("last-event-id") else {
+        return Ok(());
+    };
+    value.to_str().map_err(|_| {
+        ApiError::BadRequest("Last-Event-ID must be a valid HTTP header value".to_owned())
+    })?;
+    Ok(())
 }
 
 fn stream_queue_capacity(state: &ApiState, requested: Option<usize>) -> Result<usize, ApiError> {

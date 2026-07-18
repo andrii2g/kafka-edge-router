@@ -100,6 +100,28 @@ example uses the pod name through the Downward API and documents a required conf
 rendering step; task 010 makes this production-grade with a startup templater or native
 `group_id_suffix` setting.
 
+### SSE reverse proxies
+
+For `/v1/events`, disable response buffering and choose every proxy, ingress, and load
+balancer idle timeout to exceed `api.sse_keep_alive_secs`. The application emits
+`Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`, but operators must
+still verify their complete proxy chain:
+
+- NGINX Ingress: set `nginx.ingress.kubernetes.io/proxy-buffering: "off"` and set
+  `nginx.ingress.kubernetes.io/proxy-read-timeout` to a number of seconds comfortably
+  above the keep-alive interval.
+- Traefik: streaming responses are flushed immediately when recognized; if a middleware
+  or deployment prevents recognition, configure the service
+  `responseForwarding.flushInterval` to a negative duration for immediate flushing.
+- Envoy-based ingress: disable the route stream idle timeout or set it above the
+  keep-alive interval, and confirm no response buffer filter applies to the SSE route.
+
+See the official [Ingress-NGINX annotations](https://kubernetes.github.io/ingress-nginx/user-guide/nginx-configuration/annotations/),
+[Traefik response forwarding](https://doc.traefik.io/traefik/routing/services/#response-forwarding),
+and [Envoy route timeout](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/route/v3/route_components.proto)
+documentation. Test through the external ingress, not only against the pod IP: an SSE
+event and periodic keep-alive comment must arrive without accumulating into batches.
+
 ### systemd
 
 The unit runs an unprivileged user, restarts on failure, applies filesystem protections,

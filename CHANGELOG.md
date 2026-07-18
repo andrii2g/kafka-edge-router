@@ -10,12 +10,29 @@ All notable changes will be documented here. The project follows Semantic Versio
 
 - Added WebSocket adapter coverage for commands, tenant isolation, queue and subscription
   limits, rate limiting, oversized input, slow-consumer eviction, cancellation, and reconnect.
+- Added deterministic SSE adapter coverage for framing, escaped multiline JSON, virtual-time
+  keep-alives, strict query limits, tenant isolation, slow-consumer eviction, and cleanup.
 
 ### Changed
 
 - Added bounded WebSocket frame/message configuration, per-connection command budgets,
   stable application error codes, and explicit `1009`/`1013` close reasons.
 - Kept WebSocket per-message compression disabled pending CPU and retained-memory benchmarks.
+- Made SSE reconnect explicitly live-only: `Last-Event-ID` is parsed but ignored, responses
+  advertise replay as unsupported, and proxy buffering/idle-timeout guidance is documented.
+
+### Validation
+
+- Re-audited tasks 000-004 against their acceptance criteria with Docker available.
+- Built `kafka-edge-router:audit-000-004` from the locked workspace as
+  `sha256:258a4a004ae9f5e85901622e9e8898aea790405e1b049de61e7ced6e13549e57`;
+  the runtime image uses UID/GID `10001:10001`.
+- Passed both configuration checks, the local Kafka HTTP publish smoke path, and a
+  concurrent WebSocket/SSE probe that received the same stable message id using the built
+  container.
+- Passed all four required broker-backed Kafka integration tests against Apache Kafka
+  4.3.1: ordering, commit/poison policy, restart duplicate, and forced rebalance.
+
 ## 18.07.2026
 
 ### Added
