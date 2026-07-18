@@ -1,0 +1,160 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Kafka input rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(router_kafka_messages_total[5m])",
+          "legendFormat": "records/s"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "title": "Kafka lag",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "router_kafka_lag_messages",
+          "legendFormat": "messages"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      }
+    },
+    {
+      "id": 3,
+      "title": "Assigned partitions",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "router_kafka_assigned_partitions"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      }
+    },
+    {
+      "id": 4,
+      "title": "Operation latency p95",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(router_operation_latency_seconds_bucket[5m])))",
+          "legendFormat": "{{stage}}"
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      }
+    },
+    {
+      "id": 5,
+      "title": "Active connections",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "router_active_connections",
+          "legendFormat": "{{protocol}}"
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      }
+    },
+    {
+      "id": 6,
+      "title": "Queue-full rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(router_full_connections_total[5m])",
+          "legendFormat": "full/s"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 17
+      }
+    },
+    {
+      "id": 7,
+      "title": "Kafka commit errors",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "increase(router_kafka_commit_errors_total[5m])",
+          "legendFormat": "errors"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 17
+      }
+    },
+    {
+      "id": 8,
+      "title": "Webhook terminal failures",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "increase(router_webhook_failures_total[10m])",
+          "legendFormat": "failures"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 17
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 41,
+  "tags": [
+    "kafka-edge-router"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "Kafka Edge Router",
+  "uid": "kafka-edge-router",
+  "version": 1
+}

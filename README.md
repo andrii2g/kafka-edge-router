@@ -183,6 +183,14 @@ With Kafka and the daemon running:
 The gRPC contract is
 [`crates/router-proto/proto/router/v1/router.proto`](crates/router-proto/proto/router/v1/router.proto).
 
+## Observability
+
+Prometheus metrics use fixed `stage`, `protocol`, and rebalance-event labels. Optional OTLP/HTTP
+traces propagate bounded W3C trace headers, and readiness can depend on recent Kafka health with
+hysteresis. See [the observability runbook](docs/OBSERVABILITY.md), the
+[Grafana dashboard](deploy/observability/grafana-dashboard.json), and the
+[Prometheus alert rules](deploy/observability/prometheus-alerts.yaml).
+
 ## Kafka record contract
 
 Routing metadata should be encoded as Kafka headers. Only `x-tenant-id` is mandatory;
@@ -200,6 +208,8 @@ to `application/octet-stream`.
 | `x-audience-type` | paired | Audience category |
 | `x-audience-id` | paired | Audience identifier |
 | `x-content-type` | no | Payload MIME type |
+| `traceparent` | no | Bounded W3C remote trace parent |
+| `tracestate` | paired | Optional W3C vendor trace state |
 
 A recommended Kafka key is:
 

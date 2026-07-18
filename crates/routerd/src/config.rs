@@ -43,6 +43,8 @@ pub struct AppConfig {
     pub webhooks: WebhookConfig,
     /// Log formatting.
     pub logging: LoggingConfig,
+    /// Tracing export and optional dependency-aware readiness.
+    pub observability: ObservabilityConfig,
 }
 
 impl AppConfig {
@@ -68,6 +70,7 @@ impl AppConfig {
     fn validate(&self) -> anyhow::Result<()> {
         self.validate_listener_and_limits()?;
         self.validate_kafka_and_auth()?;
+        self.validate_observability()?;
         self.validate_webhooks()
     }
 
@@ -181,6 +184,30 @@ impl AppConfig {
         Ok(())
     }
 
+    fn validate_observability(&self) -> anyhow::Result<()> {
+        let telemetry = &self.observability.opentelemetry;
+        if telemetry.enabled
+            && (!matches!(
+                telemetry.endpoint.split_once("://"),
+                Some(("http" | "https", _))
+            ) || telemetry.service_name.trim().is_empty()
+                || telemetry.timeout_ms == 0
+                || telemetry.shutdown_timeout_ms == 0
+                || !(0.0..=1.0).contains(&telemetry.sampling_ratio))
+        {
+            bail!("enabled OpenTelemetry settings require an HTTP(S) endpoint, service name, positive timeouts, and sampling_ratio within 0..=1");
+        }
+        let readiness = &self.observability.kafka_readiness;
+        if readiness.enabled
+            && (readiness.check_interval_ms == 0
+                || readiness.stale_after_secs == 0
+                || readiness.failure_threshold == 0
+                || readiness.success_threshold == 0)
+        {
+            bail!("enabled Kafka readiness intervals and hysteresis thresholds must be positive");
+        }
+        Ok(())
+    }
     fn validate_webhooks(&self) -> anyhow::Result<()> {
         if self.webhooks.enabled && self.webhooks.mode == WebhookDeliveryMode::Durable {
             let durable = &self.webhooks.durable;
@@ -291,6 +318,75 @@ impl Default for LoggingConfig {
         Self {
             filter: default_log_filter(),
             json: false,
+        }
+    }
+}
+
+/// Production observability settings.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct ObservabilityConfig {
+    /// Optional OTLP trace export.
+    pub opentelemetry: OpenTelemetryConfig,
+    /// Optional Kafka dependency for readiness.
+    pub kafka_readiness: KafkaReadinessConfig,
+}
+
+/// OTLP/HTTP trace export settings.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct OpenTelemetryConfig {
+    /// Enable OTLP trace export.
+    pub enabled: bool,
+    /// OTLP HTTP endpoint.
+    pub endpoint: String,
+    /// Bounded service name attached to exported spans.
+    pub service_name: String,
+    /// Export request timeout.
+    pub timeout_ms: u64,
+    /// Provider flush deadline during shutdown.
+    pub shutdown_timeout_ms: u64,
+    /// Parent-based root trace sampling ratio in 0..=1.
+    pub sampling_ratio: f64,
+}
+
+impl Default for OpenTelemetryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: "http://127.0.0.1:4318".to_owned(),
+            service_name: "kafka-edge-router".to_owned(),
+            timeout_ms: 5_000,
+            shutdown_timeout_ms: 5_000,
+            sampling_ratio: 0.1,
+        }
+    }
+}
+
+/// Kafka readiness dependency and transition thresholds.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct KafkaReadinessConfig {
+    /// Make readiness depend on recent Kafka health.
+    pub enabled: bool,
+    /// Health polling interval.
+    pub check_interval_ms: u64,
+    /// Maximum age of a healthy Kafka observation.
+    pub stale_after_secs: u64,
+    /// Consecutive unhealthy checks required to become unready.
+    pub failure_threshold: u32,
+    /// Consecutive healthy checks required to become ready.
+    pub success_threshold: u32,
+}
+
+impl Default for KafkaReadinessConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            check_interval_ms: 1_000,
+            stale_after_secs: 30,
+            failure_threshold: 3,
+            success_threshold: 2,
         }
     }
 }
@@ -423,5 +519,19 @@ mod tests {
         let mut empty = valid;
         empty.webhooks.destinations.clear();
         assert!(empty.validate_webhooks().is_err());
+    }
+    #[test]
+    fn observability_bounds_are_validated_when_enabled() {
+        let mut config = AppConfig::default();
+        config.observability.opentelemetry.enabled = true;
+        assert!(config.validate_observability().is_ok());
+
+        config.observability.opentelemetry.sampling_ratio = 1.1;
+        assert!(config.validate_observability().is_err());
+
+        let mut readiness = AppConfig::default();
+        readiness.observability.kafka_readiness.enabled = true;
+        readiness.observability.kafka_readiness.failure_threshold = 0;
+        assert!(readiness.validate_observability().is_err());
     }
 }

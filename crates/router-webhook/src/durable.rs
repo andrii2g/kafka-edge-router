@@ -3,7 +3,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -19,8 +19,8 @@ use rdkafka::{
 };
 use reqwest::{redirect::Policy, Client, Url};
 use router_core::{
-    encode_delivery_json, ConnectionId, Delivery, DeliveryProtocol, Metrics, RouteKey,
-    RoutedMessage, Router, SubscriptionId,
+    encode_delivery_json, ConnectionId, Delivery, DeliveryProtocol, LatencyStage, Metrics,
+    RouteKey, RoutedMessage, Router, SubscriptionId, TraceContext,
 };
 use router_kafka::PreCommitSink;
 use serde::{Deserialize, Serialize};
@@ -28,7 +28,7 @@ use tokio::{
     sync::{watch, Mutex},
     time::sleep,
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, info_span, warn, Instrument as _};
 use uuid::Uuid;
 
 use crate::{
@@ -73,6 +73,8 @@ struct DurableRecord {
     source_topic: Option<String>,
     source_partition: Option<i32>,
     source_offset: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    trace_context: Option<TraceContext>,
     state: RecordState,
 }
 
@@ -199,6 +201,7 @@ impl PreCommitSink for DurableWebhookSink {
                 source_topic: source.map(|value| value.topic.to_string()),
                 source_partition: source.map(|value| value.partition),
                 source_offset: source.map(|value| value.offset),
+                trace_context: delivery.message.trace_context().cloned(),
                 state: RecordState::Delivery,
             };
             publish_record(
@@ -439,6 +442,7 @@ impl DurableWorker {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn process(
         &self,
         input: InputRecord,
@@ -455,11 +459,23 @@ impl DurableWorker {
             self.inject_crash(TestCrashPoint::BeforeRequest)?;
             sleep_until(record.next_attempt_at_ms, shutdown).await?;
             self.metrics.record_webhook_attempt();
-            match self
+            let started = Instant::now();
+            let span = info_span!(
+                "webhook.attempt",
+                message_id = %record.original_message_id,
+                attempt = record.attempt,
+            );
+            if let Some(trace_context) = &record.trace_context {
+                trace_context.set_span_parent(&span);
+            }
+            let outcome = self
                 .endpoint
                 .send_attempt(&body, &record.original_message_id, record.attempt)
-                .await
-            {
+                .instrument(span)
+                .await;
+            self.metrics
+                .record_latency(LatencyStage::WebhookAttempt, started.elapsed());
+            match outcome {
                 AttemptOutcome::Delivered(status) => {
                     self.metrics.record_webhook_success();
                     debug!(

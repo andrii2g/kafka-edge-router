@@ -1,21 +1,22 @@
 //! Long-running Kafka consumer loop with explicit offset commits.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use rdkafka::{
     client::ClientContext,
     consumer::{BaseConsumer, CommitMode, Consumer, ConsumerContext, Rebalance, StreamConsumer},
     error::KafkaResult,
+    statistics::Statistics,
     topic_partition_list::TopicPartitionList,
     ClientConfig, Message,
 };
-use router_core::{Metrics, RoutedMessage, Router};
+use router_core::{LatencyStage, Metrics, RoutedMessage, Router};
 use thiserror::Error;
 use tokio::sync::watch;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, info_span, warn, Instrument as _};
 
-use crate::{decode_message, KafkaConsumerConfig};
+use crate::{decode_message, KafkaConsumerConfig, KafkaHealth};
 /// A durable side effect that must be acknowledged before a source offset is committed.
 #[async_trait]
 pub trait PreCommitSink: Send + Sync {
@@ -37,16 +38,50 @@ pub enum KafkaIngestError {
 #[derive(Clone)]
 struct RouterConsumerContext {
     metrics: Arc<Metrics>,
+    health: KafkaHealth,
 }
 
-impl ClientContext for RouterConsumerContext {}
+impl ClientContext for RouterConsumerContext {
+    fn stats(&self, statistics: Statistics) {
+        let lag = statistics
+            .topics
+            .values()
+            .flat_map(|topic| topic.partitions.values())
+            .filter(|partition| partition.partition >= 0 && partition.consumer_lag >= 0)
+            .fold(0u64, |total, partition| {
+                total.saturating_add(u64::try_from(partition.consumer_lag).unwrap_or_default())
+            });
+        self.metrics.set_kafka_lag_messages(lag);
+        if statistics
+            .brokers
+            .values()
+            .any(|broker| broker.state == "UP")
+        {
+            self.health.mark_healthy();
+        } else {
+            self.health.mark_unhealthy();
+        }
+    }
+}
 
 impl ConsumerContext for RouterConsumerContext {
     fn pre_rebalance(&self, _consumer: &BaseConsumer<Self>, rebalance: &Rebalance<'_>) {
         match rebalance {
-            Rebalance::Assign(_) => self.metrics.record_kafka_rebalance_assignment(),
-            Rebalance::Revoke(_) => self.metrics.record_kafka_rebalance_revocation(),
-            Rebalance::Error(_) => self.metrics.record_kafka_rebalance_error(),
+            Rebalance::Assign(partitions) => {
+                self.health.mark_healthy();
+                self.metrics.record_kafka_rebalance_assignment();
+                self.metrics
+                    .set_kafka_assigned_partitions(partitions.count());
+            }
+            Rebalance::Revoke(_) => {
+                self.metrics.record_kafka_rebalance_revocation();
+                self.metrics.set_kafka_assigned_partitions(0);
+            }
+            Rebalance::Error(_) => {
+                self.health.mark_unhealthy();
+                self.metrics.record_kafka_rebalance_error();
+                self.metrics.set_kafka_assigned_partitions(0);
+            }
         }
     }
 
@@ -65,6 +100,7 @@ pub struct KafkaIngestor {
     max_payload_bytes: usize,
     commit_invalid_messages: bool,
     pre_commit_sinks: Vec<Arc<dyn PreCommitSink>>,
+    health: KafkaHealth,
 }
 
 impl KafkaIngestor {
@@ -94,10 +130,13 @@ impl KafkaIngestor {
             .set("client.id", &config.client_id)
             .set("enable.auto.commit", "false")
             .set("enable.auto.offset.store", "false")
-            .set("auto.offset.reset", &config.auto_offset_reset);
+            .set("auto.offset.reset", &config.auto_offset_reset)
+            .set("statistics.interval.ms", "10000");
 
+        let health = KafkaHealth::default();
         let context = RouterConsumerContext {
             metrics: Arc::clone(router.metrics()),
+            health: health.clone(),
         };
         let consumer: StreamConsumer<RouterConsumerContext> = client
             .create_with_context(context)
@@ -113,11 +152,18 @@ impl KafkaIngestor {
             max_payload_bytes: config.max_payload_bytes,
             commit_invalid_messages: config.commit_invalid_messages,
             pre_commit_sinks,
+            health,
         })
+    }
+
+    /// Returns the shared health signal used by optional daemon readiness checks.
+    pub fn health(&self) -> KafkaHealth {
+        self.health.clone()
     }
 
     /// Consumes until shutdown. Offset commit means the message was accepted or
     /// intentionally dropped according to local queue policy, not network delivery.
+    #[allow(clippy::too_many_lines)]
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
         info!("Kafka consumer started");
         loop {
@@ -134,16 +180,34 @@ impl KafkaIngestor {
                 result = self.consumer.recv() => {
                     match result {
                         Ok(record) => {
+                            self.health.mark_healthy();
                             let bytes = record.payload().map_or(0, <[u8]>::len);
                             self.router.metrics().record_kafka_message(bytes);
-                            match decode_message(&record, self.max_payload_bytes) {
+                            let end_to_end_started = Instant::now();
+                            let decode_started = Instant::now();
+                            let decoded = decode_message(&record, self.max_payload_bytes);
+                            self.router
+                                .metrics()
+                                .record_latency(LatencyStage::Decode, decode_started.elapsed());
+                            match decoded {
                                 Ok(message) => {
                                     let message_id = message.metadata.message_id.to_string();
+                                    let span = info_span!(
+                                        "message.route",
+                                        message_id = %message_id,
+                                        kafka.topic = record.topic(),
+                                        kafka.partition = record.partition(),
+                                        kafka.offset = record.offset(),
+                                    );
+                                    message.set_span_parent(&span);
                                     let message = Arc::new(message);
-                                    let report = self.router.dispatch(Arc::clone(&message));
+                                    let report = {
+                                        let _entered = span.enter();
+                                        self.router.dispatch(Arc::clone(&message))
+                                    };
                                     let mut persistence_failed = false;
                                     for sink in &self.pre_commit_sinks {
-                                        if let Err(reason) = sink.persist(Arc::clone(&message)).await {
+                                        if let Err(reason) = sink.persist(Arc::clone(&message)).instrument(span.clone()).await {
                                             error!(
                                                 %message_id,
                                                 %reason,
@@ -167,6 +231,10 @@ impl KafkaIngestor {
                                         self.router.metrics().record_kafka_commit_error();
                                         error!(error = %commit_error, %message_id, "failed to enqueue Kafka offset commit");
                                     }
+                                    self.router.metrics().record_latency(
+                                        LatencyStage::EndToEnd,
+                                        end_to_end_started.elapsed(),
+                                    );
                                 }
                                 Err(decode_error) => {
                                     self.router.metrics().record_invalid_message();
@@ -195,6 +263,7 @@ impl KafkaIngestor {
                             }
                         }
                         Err(kafka_error) => {
+                            self.health.mark_unhealthy();
                             error!(error = %kafka_error, "Kafka receive error");
                         }
                     }

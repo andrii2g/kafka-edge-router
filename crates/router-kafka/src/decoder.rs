@@ -4,7 +4,7 @@ use std::{str, sync::Arc};
 
 use bytes::Bytes;
 use rdkafka::{message::Headers, Message};
-use router_core::{KafkaPosition, RoutedMessage, RoutingMetadata};
+use router_core::{KafkaPosition, RoutedMessage, RoutingMetadata, TraceContext};
 use thiserror::Error;
 
 /// Kafka record contract violation.
@@ -60,6 +60,20 @@ pub fn decode_message<M: Message>(
     let content_type = optional_header(record, "x-content-type")?
         .unwrap_or("application/octet-stream")
         .to_owned();
+    let traceparent = optional_header(record, "traceparent")?;
+    let tracestate = optional_header(record, "tracestate")?;
+    let trace_context = match (traceparent, tracestate) {
+        (Some(traceparent), tracestate) => Some(
+            TraceContext::new(traceparent, tracestate)
+                .map_err(|error| DecodeError::InvalidMetadata(error.to_string()))?,
+        ),
+        (None, Some(_)) => {
+            return Err(DecodeError::InvalidMetadata(
+                "tracestate requires traceparent".to_owned(),
+            ));
+        }
+        (None, None) => None,
+    };
 
     let metadata = RoutingMetadata {
         message_id: Arc::from(message_id),
@@ -79,7 +93,7 @@ pub fn decode_message<M: Message>(
         }),
     };
 
-    RoutedMessage::new(metadata, Bytes::copy_from_slice(payload))
+    RoutedMessage::new_with_trace_context(metadata, Bytes::copy_from_slice(payload), trace_context)
         .map_err(|error| DecodeError::InvalidMetadata(error.to_string()))
 }
 
@@ -206,6 +220,39 @@ mod tests {
                 limit: 4
             }
         ));
+    }
+
+    #[test]
+    fn propagates_bounded_w3c_trace_headers() {
+        let message = decode_message(
+            &record(
+                &[
+                    ("x-tenant-id", Some(b"tenant-a")),
+                    (
+                        "traceparent",
+                        Some(b"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+                    ),
+                    ("tracestate", Some(b"vendor=value")),
+                ],
+                b"payload",
+            ),
+            1024,
+        )
+        .expect("valid trace headers");
+        assert!(message.has_trace_context());
+
+        let error = decode_message(
+            &record(
+                &[
+                    ("x-tenant-id", Some(b"tenant-a")),
+                    ("tracestate", Some(b"vendor=value")),
+                ],
+                b"payload",
+            ),
+            1024,
+        )
+        .expect_err("tracestate without traceparent");
+        assert!(matches!(error, DecodeError::InvalidMetadata(_)));
     }
 
     #[test]

@@ -108,3 +108,18 @@ channel = "news"
 [logging]
 filter = "routerd=info,router_core=info,router_kafka=info,router_api=info,router_webhook=info"
 json = true
+
+[observability.opentelemetry]
+enabled = true
+endpoint = "http://otel-collector:4318"
+service_name = "kafka-edge-router"
+timeout_ms = 5000
+shutdown_timeout_ms = 5000
+sampling_ratio = 0.1
+
+[observability.kafka_readiness]
+enabled = true
+check_interval_ms = 1000
+stale_after_secs = 30
+failure_threshold = 3
+success_threshold = 2

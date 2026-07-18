@@ -3,7 +3,9 @@
 use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
+use opentelemetry::{global, propagation::Extractor};
 use serde::{Deserialize, Serialize};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::{ids::validate_identifier, CoreError};
 
@@ -80,6 +82,51 @@ impl RoutingMetadata {
     }
 }
 
+/// Bounded W3C trace headers propagated with a routed message.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct TraceContext {
+    traceparent: Arc<str>,
+    tracestate: Option<Arc<str>>,
+}
+
+impl TraceContext {
+    /// Constructs bounded trace headers. The OpenTelemetry propagator performs semantic validation.
+    pub fn new(traceparent: &str, tracestate: Option<&str>) -> Result<Self, CoreError> {
+        validate_identifier("traceparent", traceparent, 256)?;
+        if let Some(tracestate) = tracestate {
+            validate_identifier("tracestate", tracestate, 512)?;
+        }
+        Ok(Self {
+            traceparent: Arc::from(traceparent),
+            tracestate: tracestate.map(Arc::from),
+        })
+    }
+
+    /// Restores this remote parent onto a tracing span.
+    pub fn set_span_parent(&self, span: &tracing::Span) {
+        let parent = global::get_text_map_propagator(|propagator| propagator.extract(self));
+        let _ = span.set_parent(parent);
+    }
+}
+
+impl Extractor for TraceContext {
+    fn get(&self, key: &str) -> Option<&str> {
+        match key {
+            "traceparent" => Some(&self.traceparent),
+            "tracestate" => self.tracestate.as_deref(),
+            _ => None,
+        }
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        if self.tracestate.is_some() {
+            vec!["traceparent", "tracestate"]
+        } else {
+            vec!["traceparent"]
+        }
+    }
+}
+
 /// Immutable message with a cheaply cloned payload and cached wire representation.
 #[derive(Debug)]
 pub struct RoutedMessage {
@@ -87,17 +134,45 @@ pub struct RoutedMessage {
     pub metadata: RoutingMetadata,
     /// Original Kafka payload.
     pub payload: Bytes,
+    trace_context: Option<TraceContext>,
     pub(crate) cached_payload_json: OnceLock<serde_json::Value>,
 }
 
 impl RoutedMessage {
     /// Constructs and validates a message.
     pub fn new(metadata: RoutingMetadata, payload: Bytes) -> Result<Self, CoreError> {
+        Self::new_with_trace_context(metadata, payload, None)
+    }
+
+    /// Constructs a message with optional bounded W3C trace propagation headers.
+    pub fn new_with_trace_context(
+        metadata: RoutingMetadata,
+        payload: Bytes,
+        trace_context: Option<TraceContext>,
+    ) -> Result<Self, CoreError> {
         metadata.validate()?;
         Ok(Self {
             metadata,
             payload,
+            trace_context,
             cached_payload_json: OnceLock::new(),
         })
+    }
+
+    /// Restores the extracted remote parent onto a tracing span when available.
+    pub fn set_span_parent(&self, span: &tracing::Span) {
+        if let Some(trace_context) = &self.trace_context {
+            trace_context.set_span_parent(span);
+        }
+    }
+
+    /// Returns the bounded W3C trace context when present.
+    pub fn trace_context(&self) -> Option<&TraceContext> {
+        self.trace_context.as_ref()
+    }
+
+    /// Returns true when this message carries a W3C traceparent header.
+    pub fn has_trace_context(&self) -> bool {
+        self.trace_context.is_some()
     }
 }

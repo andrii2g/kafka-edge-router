@@ -9,3 +9,4 @@ coverage/
 *.profraw
 *.profdata
 .vs/
+.codex/

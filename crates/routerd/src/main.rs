@@ -1,6 +1,8 @@
 //! `routerd` process composition and graceful lifecycle.
 
 mod config;
+mod readiness;
+mod telemetry;
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
@@ -13,7 +15,6 @@ use router_kafka::{KafkaIngestor, KafkaPublisher};
 use router_webhook::WebhookManager;
 use tokio::{net::TcpListener, sync::watch, task::JoinSet, time::timeout};
 use tracing::{error, info, warn};
-use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
@@ -27,12 +28,17 @@ struct Arguments {
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
     let arguments = Arguments::parse();
     let configuration = AppConfig::load(&arguments.config)?;
-    init_tracing(&configuration);
+    let telemetry = telemetry::TelemetryGuard::init(
+        &configuration.logging,
+        &configuration.observability.opentelemetry,
+    );
     if arguments.check_config {
         info!(path = %arguments.config.display(), "configuration is valid");
+        telemetry.shutdown();
         return Ok(());
     }
 
@@ -57,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
         pre_commit_sinks,
     )
     .context("failed to construct Kafka consumer")?;
+    let kafka_health = ingestor.health();
     let api_state = ApiState::new(
         Arc::clone(&router),
         configuration.auth.clone(),
@@ -98,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
         }
     });
     let _webhook_task = tasks.spawn({
-        let shutdown = shutdown_rx;
+        let shutdown = shutdown_rx.clone();
         async move {
             let result = webhook_manager
                 .run(shutdown)
@@ -108,11 +115,28 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    health.set_ready(true);
+    if configuration.observability.kafka_readiness.enabled {
+        let readiness_config = configuration.observability.kafka_readiness.clone();
+        let readiness_health = Arc::clone(&health);
+        let readiness_shutdown = shutdown_rx;
+        let _readiness_task = tasks.spawn(async move {
+            readiness::monitor_kafka_readiness(
+                readiness_config,
+                kafka_health,
+                readiness_health,
+                readiness_shutdown,
+            )
+            .await;
+            ("kafka-readiness", Ok(()))
+        });
+    } else {
+        health.set_ready(true);
+    }
     info!(
         http_addr = %configuration.server.http_addr,
         grpc_addr = %configuration.server.grpc_addr,
-        "router is ready"
+        kafka_readiness = configuration.observability.kafka_readiness.enabled,
+        "router listeners started"
     );
 
     tokio::select! {
@@ -134,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
 
     let grace = Duration::from_secs(configuration.server.shutdown_grace_secs.max(1));
     drain_components(&health, shutdown_tx, tasks, grace).await;
+    telemetry.shutdown();
     Ok(())
 }
 
@@ -186,22 +211,6 @@ async fn drain_components(
     }
     health.set_live(false);
     info!("router stopped");
-}
-
-fn init_tracing(configuration: &AppConfig) {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(configuration.logging.filter.clone()));
-    if configuration.logging.json {
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .json()
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .compact()
-            .init();
-    }
 }
 
 async fn shutdown_signal() -> anyhow::Result<&'static str> {

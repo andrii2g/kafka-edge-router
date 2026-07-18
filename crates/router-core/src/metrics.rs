@@ -1,6 +1,113 @@
 //! Lock-free counters and Prometheus text rendering.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    fmt::Write as _,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
+
+const LATENCY_BUCKETS_SECONDS: [f64; 14] = [
+    0.000_01, 0.000_05, 0.000_1, 0.000_25, 0.000_5, 0.001, 0.002_5, 0.005, 0.01, 0.025, 0.05, 0.1,
+    0.5, 1.0,
+];
+
+/// Bounded operation names used by latency histograms.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LatencyStage {
+    /// Kafka header decoding and metadata validation.
+    Decode,
+    /// Route candidate lookup and match coalescing.
+    Match,
+    /// Bounded delivery queue fan-out.
+    Enqueue,
+    /// Protocol adapter encoding and output handoff.
+    ProtocolWrite,
+    /// One outbound webhook HTTP attempt.
+    WebhookAttempt,
+    /// Public Kafka publish validation and broker acknowledgement.
+    Publish,
+    /// Complete valid Kafka record processing through source commit request.
+    EndToEnd,
+}
+
+impl LatencyStage {
+    const ALL: [Self; 7] = [
+        Self::Decode,
+        Self::Match,
+        Self::Enqueue,
+        Self::ProtocolWrite,
+        Self::WebhookAttempt,
+        Self::Publish,
+        Self::EndToEnd,
+    ];
+
+    const fn index(self) -> usize {
+        self as usize
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Decode => "decode",
+            Self::Match => "match",
+            Self::Enqueue => "enqueue",
+            Self::ProtocolWrite => "protocol_write",
+            Self::WebhookAttempt => "webhook_attempt",
+            Self::Publish => "publish",
+            Self::EndToEnd => "end_to_end",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Histogram {
+    buckets: [AtomicU64; LATENCY_BUCKETS_SECONDS.len()],
+    count: AtomicU64,
+    sum_micros: AtomicU64,
+}
+
+impl Default for Histogram {
+    fn default() -> Self {
+        Self {
+            buckets: std::array::from_fn(|_| AtomicU64::new(0)),
+            count: AtomicU64::new(0),
+            sum_micros: AtomicU64::new(0),
+        }
+    }
+}
+
+impl Histogram {
+    fn observe(&self, duration: Duration) {
+        let seconds = duration.as_secs_f64();
+        if let Some(bucket) = LATENCY_BUCKETS_SECONDS
+            .iter()
+            .position(|upper| seconds <= *upper)
+        {
+            self.buckets[bucket].fetch_add(1, Ordering::Relaxed);
+        }
+        self.count.fetch_add(1, Ordering::Relaxed);
+        let micros = u64::try_from(duration.as_micros()).unwrap_or(u64::MAX);
+        self.sum_micros.fetch_add(micros, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> HistogramSnapshot {
+        HistogramSnapshot {
+            buckets: std::array::from_fn(|index| self.buckets[index].load(Ordering::Relaxed)),
+            count: self.count.load(Ordering::Relaxed),
+            sum_micros: self.sum_micros.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Fixed-bucket latency histogram snapshot.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub struct HistogramSnapshot {
+    /// Non-cumulative bucket counts in ascending boundary order.
+    pub buckets: [u64; LATENCY_BUCKETS_SECONDS.len()],
+    /// Total observations, including values above the largest finite bucket.
+    pub count: u64,
+    /// Sum of observed latency in microseconds.
+    pub sum_micros: u64,
+}
 
 /// Public protocol that initiated a Kafka publish.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,6 +152,11 @@ pub struct Metrics {
     grpc_publish_acknowledged: AtomicU64,
     http_publish_failures: AtomicU64,
     grpc_publish_failures: AtomicU64,
+    active_connections: [AtomicU64; 4],
+    active_subscriptions: [AtomicU64; 4],
+    kafka_assigned_partitions: AtomicU64,
+    kafka_lag_messages: AtomicU64,
+    latency: [Histogram; 7],
 }
 
 impl Metrics {
@@ -74,6 +186,22 @@ impl Metrics {
     /// Records a Kafka consumer rebalance error callback.
     pub fn record_kafka_rebalance_error(&self) {
         self.kafka_rebalance_errors.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Replaces the current assigned-partition gauge after a rebalance callback.
+    pub fn set_kafka_assigned_partitions(&self, partitions: usize) {
+        self.kafka_assigned_partitions
+            .store(partitions as u64, Ordering::Relaxed);
+    }
+
+    /// Replaces the current aggregate consumer-lag gauge.
+    pub fn set_kafka_lag_messages(&self, lag: u64) {
+        self.kafka_lag_messages.store(lag, Ordering::Relaxed);
+    }
+
+    /// Records one bounded latency observation.
+    pub fn record_latency(&self, stage: LatencyStage, duration: Duration) {
+        self.latency[stage.index()].observe(duration);
     }
 
     /// Records a decoded and validated message.
@@ -114,6 +242,27 @@ impl Metrics {
             crate::DeliveryProtocol::HttpWebhook => &self.webhook_opened,
         };
         counter.fetch_add(1, Ordering::Relaxed);
+        self.active_connections[protocol_index(protocol)].fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_protocol_closed(
+        &self,
+        protocol: crate::DeliveryProtocol,
+        subscriptions: usize,
+    ) {
+        decrement(&self.active_connections[protocol_index(protocol)], 1);
+        decrement(
+            &self.active_subscriptions[protocol_index(protocol)],
+            subscriptions as u64,
+        );
+    }
+
+    pub(crate) fn record_subscription_added(&self, protocol: crate::DeliveryProtocol) {
+        self.active_subscriptions[protocol_index(protocol)].fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_subscription_removed(&self, protocol: crate::DeliveryProtocol) {
+        decrement(&self.active_subscriptions[protocol_index(protocol)], 1);
     }
 
     pub(crate) fn record_slow_disconnect(&self) {
@@ -220,6 +369,15 @@ impl Metrics {
             grpc_publish_acknowledged: self.grpc_publish_acknowledged.load(Ordering::Relaxed),
             http_publish_failures: self.http_publish_failures.load(Ordering::Relaxed),
             grpc_publish_failures: self.grpc_publish_failures.load(Ordering::Relaxed),
+            active_connections_by_protocol: std::array::from_fn(|index| {
+                self.active_connections[index].load(Ordering::Relaxed)
+            }),
+            active_subscriptions_by_protocol: std::array::from_fn(|index| {
+                self.active_subscriptions[index].load(Ordering::Relaxed)
+            }),
+            kafka_assigned_partitions: self.kafka_assigned_partitions.load(Ordering::Relaxed),
+            kafka_lag_messages: self.kafka_lag_messages.load(Ordering::Relaxed),
+            latency: std::array::from_fn(|index| self.latency[index].snapshot()),
         }
     }
 }
@@ -290,15 +448,43 @@ pub struct MetricsSnapshot {
     pub http_publish_failures: u64,
     /// Rejected or failed gRPC publishes.
     pub grpc_publish_failures: u64,
+    /// Active connections indexed as WebSocket, SSE, gRPC, and HTTP webhook.
+    pub active_connections_by_protocol: [u64; 4],
+    /// Active subscriptions indexed as WebSocket, SSE, gRPC, and HTTP webhook.
+    pub active_subscriptions_by_protocol: [u64; 4],
+    /// Current partitions assigned to the source consumer.
+    pub kafka_assigned_partitions: u64,
+    /// Current aggregate source-consumer lag in messages.
+    pub kafka_lag_messages: u64,
+    /// Histograms indexed by the fixed `LatencyStage` order.
+    pub latency: [HistogramSnapshot; 7],
 }
 
+fn protocol_index(protocol: crate::DeliveryProtocol) -> usize {
+    match protocol {
+        crate::DeliveryProtocol::WebSocket => 0,
+        crate::DeliveryProtocol::Sse => 1,
+        crate::DeliveryProtocol::Grpc => 2,
+        crate::DeliveryProtocol::HttpWebhook => 3,
+    }
+}
+
+fn decrement(value: &AtomicU64, amount: u64) {
+    let _ = value.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        Some(current.saturating_sub(amount))
+    });
+}
+
+const PROTOCOLS: [&str; 4] = ["websocket", "sse", "grpc", "http_webhook"];
+
 /// Renders metrics in Prometheus/OpenMetrics-compatible text format.
+#[allow(clippy::too_many_lines)]
 pub fn render_prometheus(
-    metrics: MetricsSnapshot,
+    metrics: &MetricsSnapshot,
     active_connections: usize,
     subscriptions: usize,
 ) -> String {
-    format!(
+    let mut output = format!(
         concat!(
             "# TYPE router_kafka_messages_total counter\n",
             "router_kafka_messages_total {}\n",
@@ -392,12 +578,97 @@ pub fn render_prometheus(
         metrics.grpc_publish_acknowledged,
         metrics.http_publish_failures,
         metrics.grpc_publish_failures,
+    );
+
+    writeln!(
+        output,
+        "# TYPE router_kafka_assigned_partitions gauge
+router_kafka_assigned_partitions {}",
+        metrics.kafka_assigned_partitions
     )
+    .expect("writing to String cannot fail");
+    writeln!(
+        output,
+        "# TYPE router_kafka_lag_messages gauge
+router_kafka_lag_messages {}",
+        metrics.kafka_lag_messages
+    )
+    .expect("writing to String cannot fail");
+
+    output.push_str(
+        "# TYPE router_active_connections gauge
+",
+    );
+    output.push_str(
+        "# TYPE router_active_subscriptions gauge
+",
+    );
+    for (index, protocol) in PROTOCOLS.iter().enumerate() {
+        writeln!(
+            output,
+            r#"router_active_connections{{protocol="{protocol}"}} {}"#,
+            metrics.active_connections_by_protocol[index]
+        )
+        .expect("writing to String cannot fail");
+        writeln!(
+            output,
+            r#"router_active_subscriptions{{protocol="{protocol}"}} {}"#,
+            metrics.active_subscriptions_by_protocol[index]
+        )
+        .expect("writing to String cannot fail");
+    }
+
+    output.push_str(
+        "# TYPE router_operation_latency_seconds histogram
+",
+    );
+    for stage in LatencyStage::ALL {
+        let histogram = metrics.latency[stage.index()];
+        let mut cumulative = 0u64;
+        for (index, upper) in LATENCY_BUCKETS_SECONDS.iter().enumerate() {
+            cumulative = cumulative.saturating_add(histogram.buckets[index]);
+            writeln!(
+                output,
+                r#"router_operation_latency_seconds_bucket{{stage="{}",le="{}"}} {}"#,
+                stage.label(),
+                upper,
+                cumulative
+            )
+            .expect("writing to String cannot fail");
+        }
+        writeln!(
+            output,
+            r#"router_operation_latency_seconds_bucket{{stage="{}",le="+Inf"}} {}"#,
+            stage.label(),
+            histogram.count
+        )
+        .expect("writing to String cannot fail");
+        writeln!(
+            output,
+            r#"router_operation_latency_seconds_sum{{stage="{}"}} {}.{:06}"#,
+            stage.label(),
+            histogram.sum_micros / 1_000_000,
+            histogram.sum_micros % 1_000_000
+        )
+        .expect("writing to String cannot fail");
+        writeln!(
+            output,
+            r#"router_operation_latency_seconds_count{{stage="{}"}} {}"#,
+            stage.label(),
+            histogram.count
+        )
+        .expect("writing to String cannot fail");
+    }
+    output
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{render_prometheus, Metrics, PublishProtocol};
+    use std::time::Duration;
+
+    use crate::DeliveryProtocol;
+
+    use super::{render_prometheus, LatencyStage, Metrics, PublishProtocol};
 
     #[test]
     fn renders_kafka_commit_and_rebalance_counters() {
@@ -411,7 +682,7 @@ mod tests {
         metrics.record_publish_attempt(PublishProtocol::Grpc);
         metrics.record_publish_failure(PublishProtocol::Grpc);
 
-        let rendered = render_prometheus(metrics.snapshot(), 0, 0);
+        let rendered = render_prometheus(&metrics.snapshot(), 0, 0);
         assert!(rendered.contains("router_kafka_commit_errors_total 1\n"));
         assert!(rendered.contains("router_kafka_rebalances_total{event=\"assignment\"} 1\n"));
         assert!(rendered.contains("router_kafka_rebalances_total{event=\"revocation\"} 1\n"));
@@ -420,5 +691,65 @@ mod tests {
         assert!(rendered.contains("router_publish_attempts_total{protocol=\"grpc\"} 1\n"));
         assert!(rendered.contains("router_publish_acknowledged_total{protocol=\"http\"} 1\n"));
         assert!(rendered.contains("router_publish_failures_total{protocol=\"grpc\"} 1\n"));
+    }
+    #[test]
+    fn latency_histogram_names_and_labels_are_fixed() {
+        let metrics = Metrics::default();
+        for stage in LatencyStage::ALL {
+            metrics.record_latency(stage, Duration::from_micros(250));
+        }
+
+        let rendered = render_prometheus(&metrics.snapshot(), 0, 0);
+        assert_eq!(
+            rendered
+                .lines()
+                .filter(|line| line.starts_with("router_operation_latency_seconds_count"))
+                .count(),
+            LatencyStage::ALL.len()
+        );
+        for label in [
+            "decode",
+            "match",
+            "enqueue",
+            "protocol_write",
+            "webhook_attempt",
+            "publish",
+            "end_to_end",
+        ] {
+            assert!(rendered.contains(&format!(r#"stage="{label}""#)));
+        }
+    }
+
+    #[test]
+    fn protocol_gauges_have_only_the_four_bounded_labels() {
+        let metrics = Metrics::default();
+        for protocol in [
+            DeliveryProtocol::WebSocket,
+            DeliveryProtocol::Sse,
+            DeliveryProtocol::Grpc,
+            DeliveryProtocol::HttpWebhook,
+        ] {
+            metrics.record_protocol_opened(protocol);
+            metrics.record_subscription_added(protocol);
+        }
+
+        let rendered = render_prometheus(&metrics.snapshot(), 4, 4);
+        assert_eq!(
+            rendered
+                .lines()
+                .filter(|line| line.starts_with("router_active_connections{"))
+                .count(),
+            4
+        );
+        assert_eq!(
+            rendered
+                .lines()
+                .filter(|line| line.starts_with("router_active_subscriptions{"))
+                .count(),
+            4
+        );
+        for forbidden in ["tenant", "message_id", "authorization", "payload", "url"] {
+            assert!(!rendered.contains(forbidden));
+        }
     }
 }

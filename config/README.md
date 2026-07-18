@@ -38,6 +38,17 @@ positive.
 readiness. `api.grpc_reflection_enabled` exposes gRPC reflection v1. Reflection is useful
 in the local configuration but should remain `false` in production.
 
+## Observability
+
+`observability.opentelemetry` configures optional OTLP/HTTP trace export. The sampling ratio must
+be within `0..=1`; exporter and shutdown timeouts must be positive. Exporter initialization and
+delivery failures do not stop routing.
+
+`observability.kafka_readiness` optionally gates HTTP and gRPC readiness on recent broker or
+consumer activity. Positive consecutive success and failure thresholds provide hysteresis.
+Keep this disabled when readiness must remain independent from planned Kafka maintenance. See
+[the observability runbook](../docs/OBSERVABILITY.md) for attribute and cardinality policy.
+
 ## Publish policy
 
 `api.publish_max_payload_bytes` is the shared raw-payload cap for HTTP and gRPC. It is
