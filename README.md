@@ -90,6 +90,19 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and
 - `curl`; and
 - optionally `grpcurl` and a modern browser for protocol examples.
 
+#### Windows and WSL
+
+Codex runs Windows-native commands and invokes Linux tooling, including Docker, through
+the WSL distribution configured by `WSL_DISTRIBUTION` in [`AGENTS.md`](AGENTS.md). List
+the distributions installed on your machine from PowerShell:
+
+```powershell
+wsl --list --quiet
+```
+
+If the configured name does not match your installation, update only the
+`WSL_DISTRIBUTION` value in `AGENTS.md` (for example, `Ubuntu-24.04`).
+
 ### Start Kafka and create the input topic
 
 ```bash
