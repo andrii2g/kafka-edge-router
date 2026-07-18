@@ -154,6 +154,10 @@ For SSE:
 curl -N 'http://127.0.0.1:8080/v1/events?tenant_id=tenant-demo&kind=content&channel=news'
 ```
 
+The browser example is [`examples/sse-client.html`](examples/sse-client.html). SSE
+reconnects resume live delivery only; `Last-Event-ID` is accepted but no missed events
+are replayed.
+
 For gRPC, use the commands in [`examples/grpcurl.md`](examples/grpcurl.md).
 
 ### Publish

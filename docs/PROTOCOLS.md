@@ -147,9 +147,19 @@ event: content.broadcast
 data: {"operation":"message",...}
 ```
 
-Keep-alive comments are emitted at the configured interval. The current service does not
-replay from `Last-Event-ID`; clients use it only for local deduplication until a durable
-mode is implemented.
+Keep-alive comments are emitted at `api.sse_keep_alive_secs`. The endpoint returns
+`Cache-Control: no-cache, no-transform`, `X-Accel-Buffering: no`, and
+`X-SSE-Replay: unsupported`; application response compression is disabled.
+
+The endpoint accepts only the documented filter fields, `subscription_id`, and
+`queue_capacity`. Unknown fields, invalid filters, empty identifiers, and capacities
+outside `1..=api.max_stream_queue_capacity` are rejected.
+
+Browsers automatically send `Last-Event-ID` when reconnecting after receiving an event.
+The router parses and ignores that header so native `EventSource` can reconnect, but it
+does not replay the named event or any events missed while disconnected. A reconnect
+starts a new live-only subscription. Clients must use each SSE `id` for deduplication and
+must not treat reconnect as recovery of missed events.
 
 ## gRPC
 

@@ -1981,6 +1981,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "http",
+ "http-body-util",
  "router-core",
  "router-proto",
  "serde",
@@ -1990,6 +1991,7 @@ dependencies = [
  "tokio-stream",
  "tokio-tungstenite",
  "tonic",
+ "tower",
  "tower-http 0.7.0",
  "tracing",
 ]
