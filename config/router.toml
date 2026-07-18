@@ -18,6 +18,7 @@ grpc_keep_alive_interval_secs = 30
 grpc_keep_alive_timeout_secs = 10
 grpc_health_enabled = true
 grpc_reflection_enabled = true
+publish_max_payload_bytes = 1048576
 
 [router]
 default_queue_capacity = 256
@@ -31,6 +32,7 @@ mode = "disabled"
 default_tenant = "tenant-demo"
 tenant_header = "x-tenant-id"
 bearer_tokens = {}
+publish_tenants = ["tenant-demo"]
 
 [kafka.consumer]
 brokers = "localhost:9092"

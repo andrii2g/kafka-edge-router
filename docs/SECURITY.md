@@ -40,10 +40,14 @@ Authentication resolves a `Principal` with exactly one tenant. Protocol adapters
 
 - reject a request tenant that differs from the principal;
 - rewrite subscription filters to the principal tenant; and
-- register core connections using the principal tenant.
+- register core connections using the principal tenant; and
+- require the principal tenant in `auth.publish_tenants` before either publish API can
+  invoke Kafka.
 
-Future channel, audience, or action authorization belongs in an explicit policy layer
-before `Router::subscribe` or publish. Do not encode authorization as a payload filter.
+Publish permission is independent from subscription authentication. The current hook is
+a tenant allowlist; future channel, audience, or action authorization belongs in that
+explicit policy layer before `Router::subscribe` or publish. Do not encode authorization
+as a payload filter.
 
 ## Input limits
 

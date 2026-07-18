@@ -1,6 +1,9 @@
 //! Generated-client gRPC contract, flow-control, and lifecycle tests.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use bytes::Bytes;
 use router_api::{serve_grpc, ApiConfig, ApiState, AuthConfig, AuthMode, HealthState};
@@ -89,6 +92,7 @@ fn api_config() -> ApiConfig {
 fn disabled_auth() -> AuthConfig {
     AuthConfig {
         default_tenant: Some("tenant-a".to_owned()),
+        publish_tenants: BTreeSet::from(["tenant-a".to_owned()]),
         ..AuthConfig::default()
     }
 }

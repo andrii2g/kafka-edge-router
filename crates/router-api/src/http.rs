@@ -19,12 +19,13 @@ use axum::{
     routing::{get, post},
     Json, Router as AxumRouter,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use http::{header, HeaderMap, HeaderValue, StatusCode};
 use router_core::{
     encode_delivery_json, render_prometheus, ConnectionId, CoreError, DeliveryProtocol,
-    PublishCommand, PublishErrorKind, RouteFilter, SubscriptionId,
+    PublishCommand, PublishErrorKind, PublishProtocol, RouteFilter, SubscriptionId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -108,11 +109,24 @@ async fn metrics(State(state): State<ApiState>) -> Response {
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
 }
 
-fn default_content_type() -> String {
-    "application/json".to_owned()
+#[derive(Debug, Default)]
+enum JsonPayload {
+    #[default]
+    Missing,
+    Present(Value),
+}
+
+impl<'de> Deserialize<'de> for JsonPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Value::deserialize(deserializer).map(Self::Present)
+    }
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct HttpPublishRequest {
     #[serde(default)]
     message_id: Option<String>,
@@ -130,9 +144,14 @@ struct HttpPublishRequest {
     audience_type: Option<String>,
     #[serde(default)]
     audience_id: Option<String>,
-    #[serde(default = "default_content_type")]
-    content_type: String,
-    payload: Value,
+    #[serde(default)]
+    ordering_key: Option<String>,
+    #[serde(default)]
+    content_type: Option<String>,
+    #[serde(default)]
+    payload: JsonPayload,
+    #[serde(default)]
+    payload_base64: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -148,20 +167,45 @@ async fn publish(
     headers: HeaderMap,
     Json(request): Json<HttpPublishRequest>,
 ) -> Result<Json<HttpPublishResponse>, ApiError> {
+    state
+        .router
+        .metrics()
+        .record_publish_attempt(PublishProtocol::Http);
+    let result = publish_http_inner(&state, &headers, request).await;
+    if result.is_ok() {
+        state
+            .router
+            .metrics()
+            .record_publish_acknowledged(PublishProtocol::Http);
+    } else {
+        state
+            .router
+            .metrics()
+            .record_publish_failure(PublishProtocol::Http);
+    }
+    result
+}
+
+async fn publish_http_inner(
+    state: &ApiState,
+    headers: &HeaderMap,
+    request: HttpPublishRequest,
+) -> Result<Json<HttpPublishResponse>, ApiError> {
     let principal = state
         .authenticator
-        .authenticate_http(&headers, request.tenant_id.as_deref())?;
+        .authenticate_http(headers, request.tenant_id.as_deref())?;
     authorize_requested_tenant(&principal, request.tenant_id.as_deref())?;
-    let publisher = state
-        .publisher
-        .as_ref()
-        .ok_or(ApiError::PublisherUnavailable)?;
-    let payload = serde_json::to_vec(&request.payload)
-        .map(Bytes::from)
-        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let receipt = publisher
-        .publish(PublishCommand {
-            message_id: request.message_id.map(Arc::from),
+    state.authenticator.authorize_publish(&principal)?;
+
+    let (payload, content_type) = http_publish_payload(
+        request.payload,
+        request.payload_base64,
+        request.content_type,
+        state.config.publish_max_payload_bytes,
+    )?;
+    let command = crate::publish::validate_command(
+        PublishCommand {
+            message_id: crate::publish::effective_message_id(request.message_id),
             tenant_id: principal.tenant_id,
             kind: request.kind.map(Arc::from),
             message_type: request.message_type.map(Arc::from),
@@ -169,23 +213,69 @@ async fn publish(
             actor_id: request.actor_id.map(Arc::from),
             audience_type: request.audience_type.map(Arc::from),
             audience_id: request.audience_id.map(Arc::from),
-            content_type: Arc::from(request.content_type),
+            ordering_key: request.ordering_key.map(Arc::from),
+            content_type: Arc::from(content_type),
             payload,
-        })
-        .await
-        .map_err(|error| match error.kind() {
-            PublishErrorKind::InvalidInput => ApiError::BadRequest(error.to_string()),
-            PublishErrorKind::Backend => {
-                warn!(error = %error, "Kafka publish failed");
-                ApiError::Backend("publish backend failed".to_owned())
-            }
-        })?;
+        },
+        state.config.publish_max_payload_bytes,
+    )?;
+    let publisher = state
+        .publisher
+        .as_ref()
+        .ok_or(ApiError::PublisherUnavailable)?;
+    let receipt = publisher.publish(command).await.map_err(|error| {
+        if error.kind() == PublishErrorKind::Backend {
+            warn!(error = %error, "Kafka publish failed");
+        }
+        crate::publish::map_publish_error(&error)
+    })?;
     Ok(Json(HttpPublishResponse {
         message_id: receipt.message_id,
         topic: receipt.topic,
         partition: receipt.partition,
         offset: receipt.offset,
     }))
+}
+
+fn http_publish_payload(
+    payload: JsonPayload,
+    payload_base64: Option<String>,
+    content_type: Option<String>,
+    maximum_payload_bytes: usize,
+) -> Result<(Bytes, String), ApiError> {
+    match (payload, payload_base64) {
+        (JsonPayload::Present(value), None) => {
+            let content_type = content_type.unwrap_or_else(|| "application/json".to_owned());
+            crate::publish::validate_json_content_type(&content_type)?;
+            let payload = serde_json::to_vec(&value)
+                .map(Bytes::from)
+                .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+            Ok((payload, content_type))
+        }
+        (JsonPayload::Missing, Some(encoded)) => {
+            let content_type = content_type
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    ApiError::BadRequest("content_type is required with payload_base64".to_owned())
+                })?;
+            let maximum_encoded = maximum_payload_bytes
+                .saturating_add(2)
+                .saturating_div(3)
+                .saturating_mul(4);
+            if encoded.len() > maximum_encoded {
+                return Err(ApiError::BadRequest(format!(
+                    "payload exceeds maximum size of {maximum_payload_bytes} bytes"
+                )));
+            }
+            let decoded = BASE64.decode(encoded).map_err(|_| {
+                ApiError::BadRequest("payload_base64 is not valid base64".to_owned())
+            })?;
+            Ok((Bytes::from(decoded), content_type))
+        }
+        (JsonPayload::Present(_), Some(_)) | (JsonPayload::Missing, None) => Err(
+            ApiError::BadRequest("provide exactly one of payload or payload_base64".to_owned()),
+        ),
+    }
 }
 
 #[derive(Debug, Deserialize)]

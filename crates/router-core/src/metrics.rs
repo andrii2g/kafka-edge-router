@@ -2,6 +2,15 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Public protocol that initiated a Kafka publish.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PublishProtocol {
+    /// JSON or base64 HTTP endpoint.
+    Http,
+    /// Raw-byte gRPC method.
+    Grpc,
+}
+
 /// Process-wide router counters.
 #[derive(Debug, Default)]
 pub struct Metrics {
@@ -26,6 +35,12 @@ pub struct Metrics {
     webhook_attempts: AtomicU64,
     webhook_successes: AtomicU64,
     webhook_failures: AtomicU64,
+    http_publish_attempts: AtomicU64,
+    grpc_publish_attempts: AtomicU64,
+    http_publish_acknowledged: AtomicU64,
+    grpc_publish_acknowledged: AtomicU64,
+    http_publish_failures: AtomicU64,
+    grpc_publish_failures: AtomicU64,
 }
 
 impl Metrics {
@@ -117,6 +132,33 @@ impl Metrics {
         self.webhook_failures.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Records one authenticated or rejected public publish attempt.
+    pub fn record_publish_attempt(&self, protocol: PublishProtocol) {
+        let counter = match protocol {
+            PublishProtocol::Http => &self.http_publish_attempts,
+            PublishProtocol::Grpc => &self.grpc_publish_attempts,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records one broker-acknowledged public publish.
+    pub fn record_publish_acknowledged(&self, protocol: PublishProtocol) {
+        let counter = match protocol {
+            PublishProtocol::Http => &self.http_publish_acknowledged,
+            PublishProtocol::Grpc => &self.grpc_publish_acknowledged,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records one public publish rejected or failed before acknowledgement.
+    pub fn record_publish_failure(&self, protocol: PublishProtocol) {
+        let counter = match protocol {
+            PublishProtocol::Http => &self.http_publish_failures,
+            PublishProtocol::Grpc => &self.grpc_publish_failures,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Captures a consistent-enough relaxed snapshot for status and metrics.
     pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
@@ -141,6 +183,12 @@ impl Metrics {
             webhook_attempts: self.webhook_attempts.load(Ordering::Relaxed),
             webhook_successes: self.webhook_successes.load(Ordering::Relaxed),
             webhook_failures: self.webhook_failures.load(Ordering::Relaxed),
+            http_publish_attempts: self.http_publish_attempts.load(Ordering::Relaxed),
+            grpc_publish_attempts: self.grpc_publish_attempts.load(Ordering::Relaxed),
+            http_publish_acknowledged: self.http_publish_acknowledged.load(Ordering::Relaxed),
+            grpc_publish_acknowledged: self.grpc_publish_acknowledged.load(Ordering::Relaxed),
+            http_publish_failures: self.http_publish_failures.load(Ordering::Relaxed),
+            grpc_publish_failures: self.grpc_publish_failures.load(Ordering::Relaxed),
         }
     }
 }
@@ -190,6 +238,18 @@ pub struct MetricsSnapshot {
     pub webhook_successes: u64,
     /// Terminal webhook failures.
     pub webhook_failures: u64,
+    /// HTTP publish attempts.
+    pub http_publish_attempts: u64,
+    /// gRPC publish attempts.
+    pub grpc_publish_attempts: u64,
+    /// Broker-acknowledged HTTP publishes.
+    pub http_publish_acknowledged: u64,
+    /// Broker-acknowledged gRPC publishes.
+    pub grpc_publish_acknowledged: u64,
+    /// Rejected or failed HTTP publishes.
+    pub http_publish_failures: u64,
+    /// Rejected or failed gRPC publishes.
+    pub grpc_publish_failures: u64,
 }
 
 /// Renders metrics in Prometheus/OpenMetrics-compatible text format.
@@ -240,7 +300,16 @@ pub fn render_prometheus(
             "# TYPE router_webhook_successes_total counter\n",
             "router_webhook_successes_total {}\n",
             "# TYPE router_webhook_failures_total counter\n",
-            "router_webhook_failures_total {}\n"
+            "router_webhook_failures_total {}\n",
+            "# TYPE router_publish_attempts_total counter\n",
+            "router_publish_attempts_total{{protocol=\"http\"}} {}\n",
+            "router_publish_attempts_total{{protocol=\"grpc\"}} {}\n",
+            "# TYPE router_publish_acknowledged_total counter\n",
+            "router_publish_acknowledged_total{{protocol=\"http\"}} {}\n",
+            "router_publish_acknowledged_total{{protocol=\"grpc\"}} {}\n",
+            "# TYPE router_publish_failures_total counter\n",
+            "router_publish_failures_total{{protocol=\"http\"}} {}\n",
+            "router_publish_failures_total{{protocol=\"grpc\"}} {}\n"
         ),
         metrics.kafka_messages,
         metrics.kafka_bytes,
@@ -265,12 +334,18 @@ pub fn render_prometheus(
         metrics.webhook_attempts,
         metrics.webhook_successes,
         metrics.webhook_failures,
+        metrics.http_publish_attempts,
+        metrics.grpc_publish_attempts,
+        metrics.http_publish_acknowledged,
+        metrics.grpc_publish_acknowledged,
+        metrics.http_publish_failures,
+        metrics.grpc_publish_failures,
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{render_prometheus, Metrics};
+    use super::{render_prometheus, Metrics, PublishProtocol};
 
     #[test]
     fn renders_kafka_commit_and_rebalance_counters() {
@@ -279,11 +354,19 @@ mod tests {
         metrics.record_kafka_rebalance_assignment();
         metrics.record_kafka_rebalance_revocation();
         metrics.record_kafka_rebalance_error();
+        metrics.record_publish_attempt(PublishProtocol::Http);
+        metrics.record_publish_acknowledged(PublishProtocol::Http);
+        metrics.record_publish_attempt(PublishProtocol::Grpc);
+        metrics.record_publish_failure(PublishProtocol::Grpc);
 
         let rendered = render_prometheus(metrics.snapshot(), 0, 0);
         assert!(rendered.contains("router_kafka_commit_errors_total 1\n"));
         assert!(rendered.contains("router_kafka_rebalances_total{event=\"assignment\"} 1\n"));
         assert!(rendered.contains("router_kafka_rebalances_total{event=\"revocation\"} 1\n"));
         assert!(rendered.contains("router_kafka_rebalances_total{event=\"error\"} 1\n"));
+        assert!(rendered.contains("router_publish_attempts_total{protocol=\"http\"} 1\n"));
+        assert!(rendered.contains("router_publish_attempts_total{protocol=\"grpc\"} 1\n"));
+        assert!(rendered.contains("router_publish_acknowledged_total{protocol=\"http\"} 1\n"));
+        assert!(rendered.contains("router_publish_failures_total{protocol=\"grpc\"} 1\n"));
     }
 }

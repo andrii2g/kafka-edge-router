@@ -37,3 +37,14 @@ positive.
 `api.grpc_health_enabled` exposes the standard gRPC health service and tracks daemon
 readiness. `api.grpc_reflection_enabled` exposes gRPC reflection v1. Reflection is useful
 in the local configuration but should remain `false` in production.
+
+## Publish policy
+
+`api.publish_max_payload_bytes` is the shared raw-payload cap for HTTP and gRPC. It is
+checked before Kafka send and must be positive. Keep it at or below the Kafka and memory
+budget; the HTTP request-body limit independently caps the complete JSON request.
+
+`auth.publish_tenants` is an explicit tenant allowlist applied after authentication and
+tenant matching. Subscription credentials do not imply publish permission. In
+`static_bearer` mode every listed publish tenant must also appear as a bearer-token
+mapping.

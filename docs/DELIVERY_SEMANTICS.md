@@ -124,9 +124,20 @@ that work and its recovery tests may documentation describe webhook delivery as 
 HTTP or gRPC publish returns after the idempotent Kafka producer receives partition and
 offset. It proves broker acknowledgement, not consumption or downstream delivery.
 
-The producer uses a stable entity key selected from audience or channel. Callers that
-need stronger producer-side deduplication should provide a stable message id and ensure
-their own retry behavior does not intentionally create new ids.
+The producer uses a stable entity key selected from audience, channel, or the tenant. A
+validated explicit ordering key is allowed and is always prefixed with the authenticated
+tenant. Kafka order remains partition-local.
+
+When `message_id` is omitted, the API generates a UUID before invoking the publisher.
+Callers retrying one logical event should generate and reuse their own stable id,
+especially when the acknowledgement response can be lost. Reusing an id does not make
+the public API a deduplicating store: each broker-acknowledged call may append a record.
+Consumers and webhook receivers use the stable id for idempotent processing.
+
+Payload size, MIME syntax, audience pairing, ordering-key syntax, and routing identifiers
+are validated before Kafka send. HTTP JSON and base64 forms and gRPC raw bytes converge
+on the same transport-neutral command. Kafka queue saturation and acknowledgement timeout
+remain distinct public failures.
 
 ## Future durable-client mode
 

@@ -1,6 +1,9 @@
 //! Tenant-scoped authentication modes suitable for local and proxied deployments.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use http::{header::AUTHORIZATION, HeaderMap};
 use serde::Deserialize;
@@ -37,6 +40,8 @@ pub struct AuthConfig {
     pub tenant_header: String,
     /// Opaque token to tenant mapping in static-bearer mode.
     pub bearer_tokens: BTreeMap<String, String>,
+    /// Tenants whose authenticated principals may use publish APIs.
+    pub publish_tenants: BTreeSet<String>,
 }
 
 impl Default for AuthConfig {
@@ -46,6 +51,7 @@ impl Default for AuthConfig {
             default_tenant: None,
             tenant_header: default_tenant_header(),
             bearer_tokens: BTreeMap::new(),
+            publish_tenants: BTreeSet::new(),
         }
     }
 }
@@ -118,6 +124,19 @@ impl Authenticator {
                     .ok_or(ApiError::Unauthorized)?;
                 principal(value)
             }
+        }
+    }
+
+    /// Applies publish authorization independently from subscription authentication.
+    pub fn authorize_publish(&self, principal: &Principal) -> Result<(), ApiError> {
+        if self
+            .config
+            .publish_tenants
+            .contains(principal.tenant_id.as_ref())
+        {
+            Ok(())
+        } else {
+            Err(ApiError::Forbidden)
         }
     }
 

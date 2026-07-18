@@ -239,8 +239,34 @@ Request:
 }
 ```
 
-The HTTP adapter serializes the JSON `payload` value. Use gRPC publish for arbitrary raw
-bytes. A successful response means Kafka acknowledged the record:
+The request must provide exactly one payload representation:
+
+- `payload`: any JSON value, including `null`; it defaults to `application/json` and
+  an explicit content type must be `application/json` or `application/*+json`;
+- `payload_base64`: standard padded base64 for arbitrary bytes; `content_type` is
+  required.
+
+Both forms are capped by `api.publish_max_payload_bytes`. The endpoint rejects unknown
+fields, ambiguous payloads, malformed base64, MIME wildcards, incomplete audience pairs,
+and invalid routing identifiers before calling Kafka. gRPC carries raw `bytes payload`
+and applies the same size, metadata, audience, message-id, ordering-key, authorization,
+and backend-error contract.
+
+Publishing requires both an authenticated tenant and membership in
+`auth.publish_tenants`. This permission is separate from subscription access. A caller
+can never select another tenant.
+
+`message_id` is optional at the API boundary. The router generates a UUID when omitted.
+A retry that represents the same logical event must reuse one caller-generated message
+id. The router does not suppress repeated API requests: two accepted calls can create two
+Kafka records with the same id, and consumers must deduplicate by that id.
+
+`ordering_key` is optional. When absent, the producer derives a key from the audience,
+then channel, then tenant. An explicit key is validated and encoded as
+`<tenant>:explicit:<ordering_key>`, so caller-controlled keys cannot share a Kafka key
+across tenants.
+
+A successful response means Kafka acknowledged the record:
 
 ```json
 {
@@ -252,6 +278,18 @@ bytes. A successful response means Kafka acknowledged the record:
 ```
 
 It does not mean any live client or webhook received the event.
+
+Stable publish failures:
+
+| Condition | HTTP | gRPC |
+|---|---:|---|
+| Missing/invalid credentials | `401` | `UNAUTHENTICATED` |
+| Tenant mismatch or publish permission denied | `403` | `PERMISSION_DENIED` |
+| Payload or metadata validation failed | `400` | `INVALID_ARGUMENT` |
+| Publisher is disabled | `503` | `FAILED_PRECONDITION` |
+| Kafka producer queue is full | `503` | `RESOURCE_EXHAUSTED` |
+| Kafka acknowledgement timed out | `504` | `DEADLINE_EXCEEDED` |
+| Other Kafka backend failure | `502` | `INTERNAL` |
 
 ## Static HTTP webhooks
 

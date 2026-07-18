@@ -1976,12 +1976,14 @@ name = "router-api"
 version = "0.1.0"
 dependencies = [
  "async-stream",
+ "async-trait",
  "axum",
  "base64",
  "bytes",
  "futures-util",
  "http",
  "http-body-util",
+ "mime",
  "router-core",
  "router-proto",
  "serde",
@@ -1996,6 +1998,7 @@ dependencies = [
  "tower",
  "tower-http 0.7.0",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2007,6 +2010,7 @@ dependencies = [
  "bytes",
  "criterion",
  "dashmap",
+ "mime",
  "serde",
  "serde_json",
  "smallvec",

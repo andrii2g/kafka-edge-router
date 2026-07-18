@@ -154,9 +154,10 @@ For gRPC, use the commands in [`examples/grpcurl.md`](examples/grpcurl.md).
 ./scripts/publish-example.sh
 ```
 
-The HTTP publish endpoint serializes the `payload` JSON value, publishes it to Kafka,
-and returns the broker partition and offset. The Kafka consumer then receives the
-record and routes it to matching subscribers.
+The HTTP publish endpoint accepts exactly one JSON `payload` or base64
+`payload_base64`, publishes it to Kafka, and returns the broker partition and offset.
+Publishing requires the tenant to be listed in `auth.publish_tenants`. The Kafka
+consumer then receives the record and routes it to matching subscribers.
 
 ### Smoke test
 
@@ -174,7 +175,7 @@ With Kafka and the daemon running:
 | `GET` | `/health/ready` | Traffic readiness |
 | `GET` | `/metrics` | Prometheus text exposition |
 | `GET` | `/v1/status` | Runtime cardinalities and counters |
-| `POST` | `/v1/publish` | Publish a JSON payload to Kafka |
+| `POST` | `/v1/publish` | Publish JSON or base64-encoded bytes to Kafka |
 | `GET` | `/v1/ws` | Upgrade to a dynamic WebSocket session |
 | `GET` | `/v1/events` | Open a fixed-filter SSE stream |
 

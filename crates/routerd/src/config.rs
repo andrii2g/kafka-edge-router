@@ -90,6 +90,7 @@ impl AppConfig {
             || self.api.grpc_concurrency_limit == 0
             || self.api.grpc_keep_alive_interval_secs == 0
             || self.api.grpc_keep_alive_timeout_secs == 0
+            || self.api.publish_max_payload_bytes == 0
         {
             bail!("HTTP, SSE, WebSocket, and gRPC limits must be positive");
         }
@@ -157,6 +158,25 @@ impl AppConfig {
         }
         if self.auth.mode == AuthMode::StaticBearer && self.auth.bearer_tokens.is_empty() {
             bail!("auth.bearer_tokens must not be empty in static_bearer mode");
+        }
+        if self
+            .auth
+            .publish_tenants
+            .iter()
+            .any(|tenant| tenant.trim().is_empty())
+        {
+            bail!("auth.publish_tenants must not contain empty tenant ids");
+        }
+        if self.auth.mode == AuthMode::StaticBearer
+            && self.auth.publish_tenants.iter().any(|tenant| {
+                !self
+                    .auth
+                    .bearer_tokens
+                    .values()
+                    .any(|mapped| mapped == tenant)
+            })
+        {
+            bail!("every auth.publish_tenants entry must have a static bearer mapping");
         }
         Ok(())
     }
@@ -318,6 +338,10 @@ mod tests {
         let mut zero = valid.clone();
         zero.api.ws_max_commands_per_second = 0;
         assert!(zero.validate_listener_and_limits().is_err());
+
+        let mut zero_publish = valid.clone();
+        zero_publish.api.publish_max_payload_bytes = 0;
+        assert!(zero_publish.validate_listener_and_limits().is_err());
 
         let mut oversized_frame = valid;
         oversized_frame.api.ws_max_frame_bytes = 129;

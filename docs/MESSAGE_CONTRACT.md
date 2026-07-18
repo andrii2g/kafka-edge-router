@@ -56,6 +56,13 @@ Channel event:
 tenant-a:channel:news
 ```
 
+The public publish API may accept an explicit ordering key. It is encoded as:
+
+```text
+tenant-a:explicit:<ordering-key>
+```
+
+The authenticated tenant prefix is mandatory and prevents cross-tenant key sharing.
 Kafka only guarantees order within one partition. A producer changing key strategy can
 change ordering and should be treated as a contract migration.
 

@@ -13,7 +13,7 @@ mod wire;
 pub use error::CoreError;
 pub use ids::{ConnectionId, SubscriptionId};
 pub use message::{KafkaPosition, RoutedMessage, RoutingMetadata};
-pub use metrics::{render_prometheus, Metrics, MetricsSnapshot};
+pub use metrics::{render_prometheus, Metrics, MetricsSnapshot, PublishProtocol};
 pub use protocol::DeliveryProtocol;
 pub use publisher::{
     MessagePublisher, PublishCommand, PublishError, PublishErrorKind, PublishReceipt,

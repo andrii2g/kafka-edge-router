@@ -15,6 +15,8 @@ All notable changes will be documented here. The project follows Semantic Versio
 - Added generated-client gRPC integration coverage for fixed and bidirectional streams,
   authentication and tenant denial, invalid commands, duplicate subscriptions, cancellation,
   bounded slow receivers, publisher availability, standard health, and reflection.
+- Added HTTP/gRPC publish contract tests for authorization, idempotency identity, exact
+  JSON/base64/raw bytes, validation, ordering keys, backend errors, and safe metrics.
 
 ### Changed
 
@@ -26,6 +28,9 @@ All notable changes will be documented here. The project follows Semantic Versio
 - Added configurable gRPC message-size, per-connection concurrency, load-shedding, and
   HTTP/2 keepalive limits, centralized RPC authentication, readiness-backed standard health,
   and locally enabled but production-disabled reflection.
+- Defined a shared bounded publish contract with an explicit tenant allowlist, generated or
+  caller-stable message ids, JSON/base64 HTTP modes, additive gRPC ordering keys,
+  tenant-prefixed Kafka keys, classified timeout/queue-full errors, and publish counters.
 
 ### Validation
 

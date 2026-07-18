@@ -4,6 +4,7 @@ mod auth;
 mod error;
 mod grpc;
 mod http;
+mod publish;
 mod state;
 
 pub use auth::{AuthConfig, AuthMode, Authenticator, Principal};
