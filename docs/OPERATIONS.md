@@ -101,7 +101,7 @@ rendering step; task 010 makes this production-grade with a startup templater or
 ### systemd
 
 The unit runs an unprivileged user, restarts on failure, applies filesystem protections,
-and sends SIGTERM. Install configuration under `/etc/rust-kafka-edge-router/router.toml`.
+and sends SIGTERM. Install configuration under `/etc/kafka-edge-router/router.toml`.
 
 ### Container
 

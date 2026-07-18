@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Bounded outbound HTTP webhook delivery for rust-kafka-edge-router"
+description = "Bounded outbound HTTP webhook delivery for kafka-edge-router"
 
 [dependencies]
 bytes.workspace = true

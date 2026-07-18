@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: rust-kafka-edge-router
+  name: kafka-edge-router
   namespace: kafka-router
 data:
   router.toml: |
@@ -30,7 +30,7 @@ data:
     [kafka.consumer]
     brokers = "kafka.kafka.svc.cluster.local:9092"
     group_id = "overridden-by-pod-environment"
-    client_id = "rust-kafka-edge-router"
+    client_id = "kafka-edge-router"
     topics = ["router.input"]
     auto_offset_reset = "latest"
     max_payload_bytes = 1048576
@@ -39,7 +39,7 @@ data:
     [kafka.producer]
     enabled = true
     brokers = "kafka.kafka.svc.cluster.local:9092"
-    client_id = "rust-kafka-edge-router-producer"
+    client_id = "kafka-edge-router-producer"
     topic = "router.input"
     delivery_timeout_ms = 10000
 

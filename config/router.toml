@@ -24,8 +24,8 @@ bearer_tokens = {}
 
 [kafka.consumer]
 brokers = "localhost:9092"
-group_id = "rust-kafka-edge-router-local"
-client_id = "rust-kafka-edge-router-consumer"
+group_id = "kafka-edge-router-local"
+client_id = "kafka-edge-router-consumer"
 topics = ["router.input"]
 auto_offset_reset = "earliest"
 max_payload_bytes = 1048576
@@ -38,7 +38,7 @@ commit_invalid_messages = true
 [kafka.producer]
 enabled = true
 brokers = "localhost:9092"
-client_id = "rust-kafka-edge-router-producer"
+client_id = "kafka-edge-router-producer"
 topic = "router.input"
 delivery_timeout_ms = 10000
 

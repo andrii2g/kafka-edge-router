@@ -56,7 +56,7 @@ cargo test --locked --doc --workspace
 cargo run --locked -p routerd -- --config config/router.toml --check-config
 cargo run --locked -p routerd -- --config config/router.production.example.toml --check-config
 cargo build --locked --release --bin routerd
-docker build --pull -t rust-kafka-edge-router:task-000 .
+docker build --pull -t kafka-edge-router:task-000 .
 python scripts/validate-repo.py
 ```
 

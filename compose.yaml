@@ -1,10 +1,10 @@
-name: rust-kafka-edge-router
+name: kafka-edge-router
 
 services:
   kafka:
     image: apache/kafka:4.3.1
     hostname: kafka
-    container_name: rust-kafka-edge-router-kafka
+    container_name: kafka-edge-router-kafka
     ports:
       - "9092:9092"
     environment:
