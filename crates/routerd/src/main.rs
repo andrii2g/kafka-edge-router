@@ -48,10 +48,15 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
-    let ingestor = KafkaIngestor::new(&configuration.kafka.consumer, Arc::clone(&router))
-        .context("failed to construct Kafka consumer")?;
     let webhook_manager = WebhookManager::new(&configuration.webhooks, &router)
         .context("failed to construct webhook manager")?;
+    let pre_commit_sinks = webhook_manager.pre_commit_sink().into_iter().collect();
+    let ingestor = KafkaIngestor::with_pre_commit_sinks(
+        &configuration.kafka.consumer,
+        Arc::clone(&router),
+        pre_commit_sinks,
+    )
+    .context("failed to construct Kafka consumer")?;
     let api_state = ApiState::new(
         Arc::clone(&router),
         configuration.auth.clone(),
@@ -95,8 +100,11 @@ async fn main() -> anyhow::Result<()> {
     let _webhook_task = tasks.spawn({
         let shutdown = shutdown_rx;
         async move {
-            webhook_manager.run(shutdown).await;
-            ("webhooks", Ok(()))
+            let result = webhook_manager
+                .run(shutdown)
+                .await
+                .context("webhook manager failed");
+            ("webhooks", result)
         }
     });
 

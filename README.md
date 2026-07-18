@@ -44,10 +44,11 @@ This repository is an implementation scaffold, not a diagram-only starter. It co
 - health, readiness, status, and Prometheus-format metrics endpoints;
 - graceful `SIGINT`/`SIGTERM` shutdown;
 - local Kafka, container, Kubernetes, systemd, CI, examples, and smoke-test files;
+- Kafka-backed durable webhook commands, restart-safe retries, and dead letters;
 - an ordered Codex execution backlog in [`tasks/`](tasks/README.md).
 
-The production-hardening boundary is explicit. Durable webhook retry topics, DNS-aware
-SSRF enforcement, JWT/JWKS authentication, TLS termination, cluster peer forwarding,
+The production-hardening boundary is explicit. DNS-aware SSRF enforcement, JWT/JWKS
+authentication, TLS termination, cluster peer forwarding,
 and end-to-end durable client sessions are deliberately tracked as follow-on tasks
 rather than being implied by an unsafe placeholder.
 
@@ -242,7 +243,7 @@ The default semantics are:
 ```text
 Kafka -> router       at least once
 router -> live client best effort
-router -> webhook     bounded in-memory retry
+router -> webhook     explicit volatile or Kafka-backed durable mode
 ordering              Kafka partition order
 duplicates            possible
 ```
@@ -252,8 +253,10 @@ dropped according to the configured local queue policy. This is not an end-to-en
 acknowledgement. A process crash can still occur between offset commit and socket write.
 Every consumer must use `message_id` as an idempotency key.
 
-The static webhook worker retries in memory. A restart loses pending webhook deliveries.
-Task 007 introduces Kafka-backed durable webhook delivery and a dead-letter topic.
+`webhooks.mode = "volatile"` retains bounded in-memory retry and restart loss.
+`webhooks.mode = "durable"` persists matched commands before source commit, resumes
+persisted retries after restart, and publishes exhausted/permanent failures to a
+dead-letter topic. See [`docs/WEBHOOK_OPERATIONS.md`](docs/WEBHOOK_OPERATIONS.md).
 
 ## Authentication modes
 
@@ -366,7 +369,7 @@ These are tracked rather than hidden:
 
 
 - no DNS-resolution pinning/revalidation for webhook hosts;
-- webhook retries are not durable across restart;
+- volatile webhook retries are not durable across restart; durable mode requires three operator-managed Kafka topics;
 - authentication does not yet validate JWT signatures or JWKS rotation;
 - public listeners do not terminate TLS themselves;
 - no Kafka consumer-lag exporter integration;

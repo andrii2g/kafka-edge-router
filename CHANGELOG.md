@@ -6,6 +6,13 @@ All notable changes will be documented here. The project follows Semantic Versio
 
 ## Unreleased
 
+- Added explicit volatile and Kafka-backed durable webhook delivery modes.
+- Durable webhook commands are acknowledged before source offset commit and retain the
+  original message id across restart-safe retries.
+- Added bounded retry recovery, terminal dead-letter publication, destination ownership
+  groups, secret-free versioned records, and dedicated durability metrics.
+- Added ADR 0005 and an operator runbook for topic retention and DLQ replay.
+
 ### Added
 
 - Added WebSocket adapter coverage for commands, tenant isolation, queue and subscription

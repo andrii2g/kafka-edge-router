@@ -6,7 +6,7 @@ use anyhow::{bail, Context};
 use router_api::{ApiConfig, AuthConfig, AuthMode};
 use router_core::RouterConfig;
 use router_kafka::{KafkaConsumerConfig, KafkaProducerConfig};
-use router_webhook::WebhookConfig;
+use router_webhook::{WebhookConfig, WebhookDeliveryMode};
 use serde::Deserialize;
 
 fn default_http_addr() -> String {
@@ -182,6 +182,32 @@ impl AppConfig {
     }
 
     fn validate_webhooks(&self) -> anyhow::Result<()> {
+        if self.webhooks.enabled && self.webhooks.mode == WebhookDeliveryMode::Durable {
+            let durable = &self.webhooks.durable;
+            if durable.brokers.trim().is_empty()
+                || durable.client_id.trim().is_empty()
+                || durable.group_id.trim().is_empty()
+                || durable.delivery_topic.trim().is_empty()
+                || durable.retry_topic.trim().is_empty()
+                || durable.dead_letter_topic.trim().is_empty()
+                || durable.delivery_timeout_ms == 0
+                || durable.max_record_bytes == 0
+                || durable.max_recovery_records == 0
+            {
+                bail!("durable webhook Kafka fields and bounds must be non-empty and positive");
+            }
+            let topics = [
+                durable.delivery_topic.as_str(),
+                durable.retry_topic.as_str(),
+                durable.dead_letter_topic.as_str(),
+            ];
+            if topics[0] == topics[1] || topics[0] == topics[2] || topics[1] == topics[2] {
+                bail!("durable webhook delivery, retry, and dead-letter topics must be distinct");
+            }
+            if self.webhooks.destinations.is_empty() {
+                bail!("durable webhook mode requires at least one destination");
+            }
+        }
         let mut webhook_ids = HashSet::new();
         for destination in &self.webhooks.destinations {
             if destination.id.trim().is_empty() {
@@ -274,7 +300,7 @@ mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
     use router_core::RouteFilter;
-    use router_webhook::WebhookDestinationConfig;
+    use router_webhook::{WebhookDeliveryMode, WebhookDestinationConfig};
 
     use super::AppConfig;
 
@@ -377,5 +403,25 @@ mod tests {
                 "webhook queue capacity {capacity}"
             );
         }
+    }
+    #[test]
+    fn durable_webhook_configuration_requires_distinct_bounded_topics() {
+        let mut valid = AppConfig::default();
+        valid.webhooks.enabled = true;
+        valid.webhooks.mode = WebhookDeliveryMode::Durable;
+        valid.webhooks.destinations = vec![webhook(8)];
+        assert!(valid.validate_webhooks().is_ok());
+
+        let mut duplicate = valid.clone();
+        duplicate.webhooks.durable.retry_topic = duplicate.webhooks.durable.delivery_topic.clone();
+        assert!(duplicate.validate_webhooks().is_err());
+
+        let mut unbounded = valid.clone();
+        unbounded.webhooks.durable.max_recovery_records = 0;
+        assert!(unbounded.validate_webhooks().is_err());
+
+        let mut empty = valid;
+        empty.webhooks.destinations.clear();
+        assert!(empty.validate_webhooks().is_err());
     }
 }

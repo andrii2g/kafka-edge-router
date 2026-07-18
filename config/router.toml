@@ -60,6 +60,7 @@ delivery_timeout_ms = 10000
 
 [webhooks]
 enabled = false
+mode = "volatile"
 destinations = []
 
 [logging]

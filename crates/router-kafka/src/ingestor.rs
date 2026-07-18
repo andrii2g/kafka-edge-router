@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use rdkafka::{
     client::ClientContext,
     consumer::{BaseConsumer, CommitMode, Consumer, ConsumerContext, Rebalance, StreamConsumer},
@@ -9,12 +10,18 @@ use rdkafka::{
     topic_partition_list::TopicPartitionList,
     ClientConfig, Message,
 };
-use router_core::{Metrics, Router};
+use router_core::{Metrics, RoutedMessage, Router};
 use thiserror::Error;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
 use crate::{decode_message, KafkaConsumerConfig};
+/// A durable side effect that must be acknowledged before a source offset is committed.
+#[async_trait]
+pub trait PreCommitSink: Send + Sync {
+    /// Persists all side effects for one validated source message.
+    async fn persist(&self, message: Arc<RoutedMessage>) -> Result<(), String>;
+}
 
 /// Kafka ingestion startup failure.
 #[derive(Debug, Error)]
@@ -57,6 +64,7 @@ pub struct KafkaIngestor {
     router: Arc<Router>,
     max_payload_bytes: usize,
     commit_invalid_messages: bool,
+    pre_commit_sinks: Vec<Arc<dyn PreCommitSink>>,
 }
 
 impl KafkaIngestor {
@@ -64,6 +72,15 @@ impl KafkaIngestor {
     pub fn new(
         config: &KafkaConsumerConfig,
         router: Arc<Router>,
+    ) -> Result<Self, KafkaIngestError> {
+        Self::with_pre_commit_sinks(config, router, Vec::new())
+    }
+
+    /// Creates a consumer with durable sinks that complete before source commit.
+    pub fn with_pre_commit_sinks(
+        config: &KafkaConsumerConfig,
+        router: Arc<Router>,
+        pre_commit_sinks: Vec<Arc<dyn PreCommitSink>>,
     ) -> Result<Self, KafkaIngestError> {
         let mut client = ClientConfig::new();
         for (key, value) in &config.properties {
@@ -95,6 +112,7 @@ impl KafkaIngestor {
             router,
             max_payload_bytes: config.max_payload_bytes,
             commit_invalid_messages: config.commit_invalid_messages,
+            pre_commit_sinks,
         })
     }
 
@@ -121,7 +139,23 @@ impl KafkaIngestor {
                             match decode_message(&record, self.max_payload_bytes) {
                                 Ok(message) => {
                                     let message_id = message.metadata.message_id.to_string();
-                                    let report = self.router.dispatch(Arc::new(message));
+                                    let message = Arc::new(message);
+                                    let report = self.router.dispatch(Arc::clone(&message));
+                                    let mut persistence_failed = false;
+                                    for sink in &self.pre_commit_sinks {
+                                        if let Err(reason) = sink.persist(Arc::clone(&message)).await {
+                                            error!(
+                                                %message_id,
+                                                %reason,
+                                                "pre-commit sink failed; stopping before source offset commit"
+                                            );
+                                            persistence_failed = true;
+                                            break;
+                                        }
+                                    }
+                                    if persistence_failed {
+                                        break;
+                                    }
                                     debug!(
                                         %message_id,
                                         matched_subscriptions = report.matched_subscriptions,

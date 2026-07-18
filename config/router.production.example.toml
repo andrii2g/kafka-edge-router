@@ -67,6 +67,24 @@ delivery_timeout_ms = 10000
 
 [webhooks]
 enabled = true
+mode = "durable"
+
+[webhooks.durable]
+brokers = "kafka-0.kafka:9092,kafka-1.kafka:9092,kafka-2.kafka:9092"
+client_id = "kafka-edge-router-webhook"
+group_id = "kafka-edge-router-webhook"
+delivery_topic = "router.webhook.delivery"
+retry_topic = "router.webhook.retry"
+dead_letter_topic = "router.webhook.dead-letter"
+delivery_timeout_ms = 10000
+max_record_bytes = 2097152
+max_recovery_records = 10000
+
+[webhooks.durable.properties]
+"security.protocol" = "SASL_SSL"
+"sasl.mechanism" = "SCRAM-SHA-512"
+"sasl.username" = "REPLACE"
+"sasl.password" = "REPLACE"
 
 [[webhooks.destinations]]
 id = "tenant-a-news"

@@ -2049,17 +2049,23 @@ dependencies = [
 name = "router-webhook"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "base64",
  "bytes",
  "hex",
  "hmac",
  "http",
+ "rdkafka",
  "reqwest",
  "router-core",
+ "router-kafka",
  "serde",
+ "serde_json",
  "sha2",
  "thiserror",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
