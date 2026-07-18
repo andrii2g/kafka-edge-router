@@ -37,7 +37,7 @@ injection tasks are complete. The evidence column names those remaining proof ga
 | Publish authorization/idempotency suite | implemented | HTTP/gRPC adapter tests cover tenant and permission denial, generated/reused ids, exact JSON/base64/raw bytes, validation before backend calls, stable errors, and payload-free metrics |
 | Durable webhook retry and DLQ | implemented | broker-backed delivery/retry/DLQ topics, source pre-commit barrier, bounded recovery, explicit duplicate windows, and idempotent receiver restart test |
 | OpenTelemetry and latency histograms | implemented | bounded W3C Kafka trace propagation, sampled OTLP/HTTP export, graceful provider flush, seven fixed latency stages, cardinality tests, dashboard, alerts, runbook, and overhead benchmark |
-| JWT/JWKS, TLS, DNS-aware SSRF | planned | task 009 |
+| JWT/JWKS, protected TLS proxy, DNS-aware SSRF, and abuse controls | implemented | bounded reloadable JWKS validation, explicit scopes, proxy mTLS identity mapping, loopback-only protected mode, per-attempt DNS pinning, port policy, cardinality/rate caps, security metrics, fuzz targets, and supply-chain scans |
 | Load, soak, SBOM, signed release | planned | task 010 |
 | Arbitrary payload expressions | not planned | violates hot-path design |
 | Exactly-once live delivery | not planned in MVP | needs separate durable mode |

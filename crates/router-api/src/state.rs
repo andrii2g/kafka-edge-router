@@ -1,8 +1,12 @@
 //! Shared API state and health gates.
 
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
 };
 
 use router_core::{ConnectionId, MessagePublisher, Router};
@@ -67,6 +71,26 @@ fn default_publish_max_payload_bytes() -> usize {
     1_048_576
 }
 
+fn default_max_rate_limit_principals() -> usize {
+    10_000
+}
+
+fn default_global_command_rate() -> u32 {
+    10_000
+}
+
+fn default_principal_command_rate() -> u32 {
+    64
+}
+
+fn default_global_publish_rate() -> u32 {
+    1_000
+}
+
+fn default_principal_publish_rate() -> u32 {
+    32
+}
+
 /// API limits shared by protocol adapters.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
@@ -101,6 +125,16 @@ pub struct ApiConfig {
     pub grpc_reflection_enabled: bool,
     /// Maximum raw payload accepted by HTTP or gRPC publishing.
     pub publish_max_payload_bytes: usize,
+    /// Maximum principal counters retained by the fixed-window limiter.
+    pub max_rate_limit_principals: usize,
+    /// Maximum protocol commands accepted process-wide per second.
+    pub global_commands_per_second: u32,
+    /// Maximum protocol commands accepted per principal per second.
+    pub principal_commands_per_second: u32,
+    /// Maximum publish commands accepted process-wide per second.
+    pub global_publishes_per_second: u32,
+    /// Maximum publish commands accepted per principal per second.
+    pub principal_publishes_per_second: u32,
 }
 
 impl Default for ApiConfig {
@@ -121,6 +155,11 @@ impl Default for ApiConfig {
             grpc_health_enabled: default_grpc_health_enabled(),
             grpc_reflection_enabled: false,
             publish_max_payload_bytes: default_publish_max_payload_bytes(),
+            max_rate_limit_principals: default_max_rate_limit_principals(),
+            global_commands_per_second: default_global_command_rate(),
+            principal_commands_per_second: default_principal_command_rate(),
+            global_publishes_per_second: default_global_publish_rate(),
+            principal_publishes_per_second: default_principal_publish_rate(),
         }
     }
 }
@@ -181,6 +220,104 @@ impl HealthState {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum RateKind {
+    Command,
+    Publish,
+}
+
+struct PrincipalRate {
+    window_started: Instant,
+    commands: u32,
+    publishes: u32,
+}
+
+struct RateState {
+    window_started: Instant,
+    commands: u32,
+    publishes: u32,
+    principals: HashMap<Arc<str>, PrincipalRate>,
+}
+
+struct AbuseLimiter {
+    config: ApiConfig,
+    state: Mutex<RateState>,
+}
+
+impl AbuseLimiter {
+    fn new(config: ApiConfig) -> Self {
+        Self {
+            config,
+            state: Mutex::new(RateState {
+                window_started: Instant::now(),
+                commands: 0,
+                publishes: 0,
+                principals: HashMap::new(),
+            }),
+        }
+    }
+
+    fn allow(&self, tenant_id: &Arc<str>, kind: RateKind) -> bool {
+        let now = Instant::now();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.window_started.elapsed() >= Duration::from_secs(1) {
+            state.window_started = now;
+            state.commands = 0;
+            state.publishes = 0;
+            state.principals.clear();
+        }
+        let (global, global_limit, principal_limit) = match kind {
+            RateKind::Command => (
+                state.commands,
+                self.config.global_commands_per_second,
+                self.config.principal_commands_per_second,
+            ),
+            RateKind::Publish => (
+                state.publishes,
+                self.config.global_publishes_per_second,
+                self.config.principal_publishes_per_second,
+            ),
+        };
+        if global >= global_limit {
+            return false;
+        }
+        if !state.principals.contains_key(tenant_id)
+            && state.principals.len() >= self.config.max_rate_limit_principals
+        {
+            return false;
+        }
+        let principal = state
+            .principals
+            .entry(Arc::clone(tenant_id))
+            .or_insert(PrincipalRate {
+                window_started: now,
+                commands: 0,
+                publishes: 0,
+            });
+        if principal.window_started.elapsed() >= Duration::from_secs(1) {
+            principal.window_started = now;
+            principal.commands = 0;
+            principal.publishes = 0;
+        }
+        let accepted = match kind {
+            RateKind::Command => &mut principal.commands,
+            RateKind::Publish => &mut principal.publishes,
+        };
+        if *accepted >= principal_limit {
+            return false;
+        }
+        *accepted += 1;
+        match kind {
+            RateKind::Command => state.commands += 1,
+            RateKind::Publish => state.publishes += 1,
+        }
+        true
+    }
+}
+
 /// Cloneable dependency container shared by handlers.
 #[derive(Clone)]
 pub struct ApiState {
@@ -194,6 +331,7 @@ pub struct ApiState {
     pub health: Arc<HealthState>,
     /// API limits.
     pub config: ApiConfig,
+    abuse_limiter: Arc<AbuseLimiter>,
 }
 
 impl ApiState {
@@ -205,13 +343,34 @@ impl ApiState {
         health: Arc<HealthState>,
         config: ApiConfig,
     ) -> Self {
+        Self::with_authenticator(router, Authenticator::new(auth), publisher, health, config)
+    }
+
+    /// Constructs API state with a preloaded reloadable authenticator.
+    pub fn with_authenticator(
+        router: Arc<Router>,
+        authenticator: Authenticator,
+        publisher: Option<Arc<dyn MessagePublisher>>,
+        health: Arc<HealthState>,
+        config: ApiConfig,
+    ) -> Self {
+        let abuse_limiter = Arc::new(AbuseLimiter::new(config.clone()));
         Self {
             router,
-            authenticator: Authenticator::new(auth),
+            authenticator,
             publisher,
             health,
             config,
+            abuse_limiter,
         }
+    }
+
+    pub(crate) fn allow_rate(&self, tenant_id: &Arc<str>, kind: RateKind) -> bool {
+        let allowed = self.abuse_limiter.allow(tenant_id, kind);
+        if !allowed {
+            self.router.metrics().record_security_limit_rejection();
+        }
+        allowed
     }
 }
 
@@ -241,7 +400,9 @@ mod tests {
 
     use router_core::{DeliveryProtocol, RouteFilter, Router, RouterConfig, SubscriptionId};
 
-    use super::{resolve_stream_queue_capacity, ApiConfig, ConnectionGuard};
+    use super::{
+        resolve_stream_queue_capacity, AbuseLimiter, ApiConfig, ConnectionGuard, RateKind,
+    };
 
     #[test]
     fn live_stream_queue_capacity_boundaries() {
@@ -257,6 +418,25 @@ mod tests {
         assert_eq!(resolve_stream_queue_capacity(&config, Some(9)), Err(8));
     }
 
+    #[test]
+    fn fixed_window_limits_are_global_per_principal_and_bounded() {
+        let limiter = AbuseLimiter::new(ApiConfig {
+            max_rate_limit_principals: 1,
+            global_commands_per_second: 2,
+            principal_commands_per_second: 1,
+            global_publishes_per_second: 1,
+            principal_publishes_per_second: 1,
+            ..ApiConfig::default()
+        });
+        let tenant_a = Arc::<str>::from("tenant-a");
+        let tenant_b = Arc::<str>::from("tenant-b");
+
+        assert!(limiter.allow(&tenant_a, RateKind::Command));
+        assert!(!limiter.allow(&tenant_a, RateKind::Command));
+        assert!(!limiter.allow(&tenant_b, RateKind::Command));
+        assert!(limiter.allow(&tenant_a, RateKind::Publish));
+        assert!(!limiter.allow(&tenant_a, RateKind::Publish));
+    }
     #[test]
     fn repeated_connection_guard_drops_are_idempotent() {
         let router = Arc::new(Router::new(RouterConfig::default()));

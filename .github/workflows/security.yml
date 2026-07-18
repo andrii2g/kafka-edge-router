@@ -19,3 +19,29 @@ jobs:
         run: cargo install cargo-audit --version 0.22.2 --locked
       - name: Audit dependencies
         run: cargo audit
+
+  secret-scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Scan repository history for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  container-scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build release image
+        run: docker build --tag kafka-edge-router:scan .
+      - name: Scan release image
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: kafka-edge-router:scan
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH

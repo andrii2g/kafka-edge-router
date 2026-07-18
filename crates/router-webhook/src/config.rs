@@ -162,7 +162,10 @@ pub struct WebhookDestinationConfig {
     /// Explicit hostname allowlist. Empty means only the configured hostname.
     #[serde(default)]
     pub allowed_hosts: Vec<String>,
-    /// Allows literal private/local IP destinations. Disabled by default.
+    /// Explicit destination port allowlist; empty permits only 443 or explicitly enabled 80.
+    #[serde(default)]
+    pub allowed_ports: Vec<u16>,
+    /// Allows private/local IP destinations. Disabled by default.
     #[serde(default)]
     pub allow_private_ips: bool,
     /// Allows plain HTTP. Disabled by default.

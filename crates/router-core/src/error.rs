@@ -28,6 +28,12 @@ pub enum CoreError {
     /// The configured subscription limit has been reached.
     #[error("connection subscription limit reached")]
     SubscriptionLimitReached,
+    /// A process-wide or per-tenant connection limit has been reached.
+    #[error("connection limit reached")]
+    ConnectionLimitReached,
+    /// A process-wide or per-tenant subscription limit has been reached.
+    #[error("subscription limit reached")]
+    GlobalSubscriptionLimitReached,
     /// A requested delivery queue is empty or exceeds the configured hard cap.
     #[error("queue capacity {requested} must be between 1 and {maximum}")]
     InvalidQueueCapacity {

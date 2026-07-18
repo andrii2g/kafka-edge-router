@@ -26,7 +26,10 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::{transport::Server, Request, Response, Status, Streaming};
 use tracing::{info_span, warn};
 
-use crate::{state::ConnectionGuard, ApiError, ApiState, Principal};
+use crate::{
+    state::{ConnectionGuard, RateKind},
+    ApiError, ApiState, Principal,
+};
 
 /// Serves the public gRPC API until shutdown.
 pub async fn serve_grpc(
@@ -142,6 +145,12 @@ impl GrpcService {
             .authenticator
             .authorize_publish(&principal)
             .map_err(ApiError::into_status)?;
+        if !self
+            .state
+            .allow_rate(&principal.tenant_id, RateKind::Publish)
+        {
+            return Err(ApiError::RateLimited.into_status());
+        }
 
         let content_type = if request.content_type.is_empty() {
             "application/octet-stream".to_owned()
@@ -208,6 +217,10 @@ impl KafkaRouter for GrpcService {
             .map(|filter| filter.tenant_id.as_str())
             .filter(|value| !value.is_empty());
         let principal = self.authenticate(&request, requested_tenant)?;
+        self.state
+            .authenticator
+            .authorize_subscribe(&principal)
+            .map_err(ApiError::into_status)?;
         let request = request.into_inner();
         let filter = request
             .filter
@@ -268,6 +281,10 @@ impl KafkaRouter for GrpcService {
         request: Request<Streaming<ClientCommand>>,
     ) -> Result<Response<Self::ConnectStream>, Status> {
         let principal = self.authenticate(&request, None)?;
+        self.state
+            .authenticator
+            .authorize_subscribe(&principal)
+            .map_err(ApiError::into_status)?;
         let mut incoming = request.into_inner();
         let registration = self
             .state
@@ -283,6 +300,7 @@ impl KafkaRouter for GrpcService {
         let mut receiver = registration.receiver;
         let guard = ConnectionGuard::new(Arc::clone(&router), connection_id);
         let metrics = Arc::clone(router.metrics());
+        let limiter = self.state.clone();
 
         let output = try_stream! {
             let _guard = guard;
@@ -317,7 +335,11 @@ impl KafkaRouter for GrpcService {
                         drop(entered);
                         yield event;
                     }
-                    ConnectInput::Command(command) => match command.command {
+                    ConnectInput::Command(command) => {
+                        if !limiter.allow_rate(&principal.tenant_id, RateKind::Command) {
+                            Err(Status::resource_exhausted("rate limit exceeded"))?;
+                        }
+                        match command.command {
                         Some(client_command::Command::Subscribe(command)) => {
                             let ack =
                                 grpc_subscribe(&router, connection_id, &principal, command)?;
@@ -346,7 +368,8 @@ impl KafkaRouter for GrpcService {
                             };
                         }
                         None => Err(Status::invalid_argument("command is required"))?,
-                    },
+                        }
+                    }
                 }
             }
         };
@@ -523,6 +546,7 @@ mod tests {
             max_queue_capacity: 1,
             max_subscriptions_per_connection: 1,
             slow_consumer_strikes: 1,
+            ..RouterConfig::default()
         }));
         let config = crate::ApiConfig {
             stream_queue_capacity: 1,

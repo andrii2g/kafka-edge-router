@@ -74,3 +74,33 @@ all-replica acknowledgements, earliest recovery, or the range assignment strateg
 
 See [the durable webhook runbook](../docs/WEBHOOK_OPERATIONS.md) before provisioning,
 changing topic partitions/retention, or replaying dead letters.
+
+## Production identity and transport
+
+Production selects server.security_mode = protected_proxy. Both daemon listeners must be
+loopback addresses and authentication cannot be disabled. A colocated TLS proxy exposes
+the public ports, strips client-supplied identity headers, and forwards only authenticated
+traffic. Use proxy_mtls when the proxy verifies client certificates and maps the injected
+identity through auth.proxy_identities.
+
+JWT mode requires auth.jwt.jwks_path, issuer, audience, an asymmetric algorithms list,
+tenant and scope claim names, explicit subscribe/publish scope names, refresh interval,
+and JWKS byte/key caps. The JWKS file is loaded before listeners start and refreshed
+without restart; an invalid refresh retains the last valid cache.
+
+## Process and principal limits
+
+router.max_connections and router.max_subscriptions cap process cardinality. Their
+per-tenant counterparts prevent one authenticated principal from exhausting the process
+budget. api.global_commands_per_second and api.global_publishes_per_second cap aggregate
+rates; the principal variants cap each tenant. api.max_rate_limit_principals bounds the
+fixed-window counter table. Limit rejection is exposed through
+router_security_limit_rejections_total.
+
+## Webhook network policy
+
+Each destination can restrict allowed_hosts and allowed_ports. An empty port list permits
+only the scheme default, normally HTTPS 443. DNS is resolved and every address is checked
+before each attempt; validated addresses are pinned to that connection. Environment HTTP
+proxies and redirects are disabled so resolution cannot bypass the private-address
+policy.

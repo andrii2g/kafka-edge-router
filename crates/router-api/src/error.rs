@@ -19,6 +19,9 @@ pub enum ApiError {
     /// Request contract or command is invalid.
     #[error("{0}")]
     BadRequest(String),
+    /// A bounded command or publish rate has been exceeded.
+    #[error("rate limit exceeded")]
+    RateLimited,
     /// Kafka publishing is disabled.
     #[error("publishing is not configured")]
     PublisherUnavailable,
@@ -41,9 +44,11 @@ impl ApiError {
             Self::Unauthorized => tonic::Status::unauthenticated(message),
             Self::Forbidden => tonic::Status::permission_denied(message),
             Self::BadRequest(_) => tonic::Status::invalid_argument(message),
+            Self::RateLimited | Self::PublisherQueueFull => {
+                tonic::Status::resource_exhausted(message)
+            }
             Self::PublisherUnavailable => tonic::Status::failed_precondition(message),
             Self::PublisherTimeout => tonic::Status::deadline_exceeded(message),
-            Self::PublisherQueueFull => tonic::Status::resource_exhausted(message),
             Self::Backend(_) => tonic::Status::internal(message),
         }
     }
@@ -53,6 +58,7 @@ impl ApiError {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::PublisherUnavailable | Self::PublisherQueueFull => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
@@ -66,6 +72,7 @@ impl ApiError {
             Self::Unauthorized => "unauthorized",
             Self::Forbidden => "forbidden",
             Self::BadRequest(_) => "bad_request",
+            Self::RateLimited => "rate_limited",
             Self::PublisherUnavailable => "publisher_unavailable",
             Self::PublisherTimeout => "publisher_timeout",
             Self::PublisherQueueFull => "publisher_queue_full",

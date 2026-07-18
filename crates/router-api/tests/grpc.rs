@@ -36,6 +36,7 @@ impl TestServer {
             max_queue_capacity: 8,
             max_subscriptions_per_connection: 4,
             slow_consumer_strikes: 1,
+            ..RouterConfig::default()
         }));
         let health = Arc::new(HealthState::default());
         let state = ApiState::new(Arc::clone(&router), auth, None, Arc::clone(&health), api);

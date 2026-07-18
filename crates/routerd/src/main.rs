@@ -9,7 +9,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use anyhow::Context;
 use clap::Parser;
 use config::AppConfig;
-use router_api::{serve_grpc, serve_http, ApiState, HealthState};
+use router_api::{serve_grpc, serve_http, ApiState, Authenticator, HealthState};
 use router_core::{MessagePublisher, Router};
 use router_kafka::{KafkaIngestor, KafkaPublisher};
 use router_webhook::WebhookManager;
@@ -42,6 +42,13 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    let authenticator = Authenticator::new(configuration.auth.clone());
+    authenticator
+        .reload_jwks()
+        .await
+        .map_err(anyhow::Error::msg)
+        .context("failed to load initial JWT key set")?;
+
     let health = Arc::new(HealthState::default());
     health.set_live(true);
     let router = Arc::new(Router::new(configuration.router.clone()));
@@ -64,9 +71,9 @@ async fn main() -> anyhow::Result<()> {
     )
     .context("failed to construct Kafka consumer")?;
     let kafka_health = ingestor.health();
-    let api_state = ApiState::new(
+    let api_state = ApiState::with_authenticator(
         Arc::clone(&router),
-        configuration.auth.clone(),
+        authenticator.clone(),
         publisher,
         Arc::clone(&health),
         configuration.api.clone(),
@@ -77,6 +84,29 @@ async fn main() -> anyhow::Result<()> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut tasks: JoinSet<(&'static str, anyhow::Result<()>)> = JoinSet::new();
 
+    if let Some(refresh_interval) = authenticator.jwks_refresh_interval() {
+        let jwt_authenticator = authenticator;
+        let mut jwt_shutdown = shutdown_rx.clone();
+        let _jwt_task = tasks.spawn(async move {
+            let mut interval = tokio::time::interval(refresh_interval);
+            interval.tick().await;
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if let Err(error) = jwt_authenticator.reload_jwks().await {
+                            warn!(%error, "JWKS reload failed; retaining previous key set");
+                        }
+                    }
+                    changed = jwt_shutdown.changed() => {
+                        if changed.is_err() || *jwt_shutdown.borrow() {
+                            break;
+                        }
+                    }
+                }
+            }
+            ("jwks-refresh", Ok(()))
+        });
+    }
     let _kafka_task = tasks.spawn({
         let shutdown = shutdown_rx.clone();
         async move {

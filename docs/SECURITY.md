@@ -2,126 +2,96 @@
 
 ## Trust boundaries
 
-The daemon crosses four boundaries:
+The daemon crosses four hostile boundaries: Kafka records, public HTTP/WebSocket/SSE
+clients, public gRPC clients, and outbound webhook destinations. Tenant identity is an
+authorization boundary. Payloads never participate in routing or authorization.
 
-1. Kafka records from producers;
-2. public HTTP/WebSocket/SSE clients;
-3. public gRPC clients; and
-4. outbound webhook destinations.
+| Threat | Control | Residual operator responsibility |
+| --- | --- | --- |
+| forged identity or cross-tenant access | JWT signature, issuer, audience, expiry, algorithm allowlist, tenant claim, explicit scopes, and filter tenant rewriting | protect the JWKS mount and issuer |
+| stolen static credentials | production supports JWT rotation and proxy mTLS identity; secrets are never logged | rotate credentials and restrict secret mounts |
+| public plaintext or trusted-header bypass | protected_proxy requires authenticated mode and loopback-only daemon listeners | expose only the TLS/mTLS proxy and strip identity headers |
+| memory/CPU exhaustion | bounded queues, global/per-tenant connection and subscription caps, bounded principal table, command/publish fixed-window rates | size limits for expected load and alert on rejections |
+| webhook SSRF or DNS rebinding | HTTPS by default, exact host and port policy, every resolved address checked, per-attempt DNS resolution pinned to the connection, redirects and environment proxies disabled | maintain egress firewall and DNS policy |
+| dependency or image compromise | locked dependencies, dependency audit, history secret scan, and release-image vulnerability scan | review CI findings and pin actions for high-assurance releases |
 
-Tenant identity is security-sensitive. Routing metadata other than tenant is treated as
-untrusted selection data and validated for size and control characters.
+## Identity and authorization
 
-## Authentication modes
+disabled is development-only. static_bearer maps an opaque token to one tenant.
+trusted_header is valid only behind the protected proxy boundary.
 
-### disabled
+jwt loads a bounded JWKS file at startup and reloads it at the configured refresh
+interval. A failed refresh retains the last valid key set. Tokens require exp, exact iss,
+configured aud, a bounded kid, and an allowed asymmetric algorithm. Supported algorithms
+are RS256/384/512, ES256/384, and EdDSA; unsigned and symmetric tokens are rejected. The
+configured tenant claim is authoritative. The scope claim must grant router.subscribe
+and/or router.publish explicitly.
 
-Only for isolated development. It accepts a requested tenant or configured default. Do
-not expose this mode to an untrusted network.
+proxy_mtls trusts an identity header only on loopback listeners in protected_proxy mode.
+The TLS proxy verifies the client certificate, strips any client-supplied identity
+header, injects the verified identity, and maps it to a configured tenant and permissions.
+Certificate and key reload belongs to that proxy, allowing rotation without restarting
+the daemon. The daemon independently reloads JWKS keys.
 
-### static_bearer
+Every protocol rejects a requested tenant that differs from the principal and rewrites
+subscription filters to the authenticated tenant. Subscription permission never implies
+publish permission.
 
-Maps an opaque bearer token to one tenant. It is suitable for controlled environments
-and bootstrap deployments but lacks token expiry, rotation metadata, issuer validation,
-and granular scopes. Inject tokens through a secret-mounted file or secure configuration
-system, not Git.
+## Production transport
 
-### trusted_header
+The production example selects server.security_mode = protected_proxy. Configuration
+validation rejects non-loopback HTTP or gRPC listeners and rejects disabled
+authentication in this mode. Therefore the daemon cannot expose a public plaintext
+listener under production security mode.
 
-Trusts a tenant header injected by an authenticated reverse proxy. The daemon must be
-network-isolated so clients cannot bypass that proxy or supply the trusted header
-directly. The proxy should strip incoming copies before adding its verified value.
+The proxy must:
 
-Task 009 adds JWT/JWKS validation and optional mTLS identity mapping.
+1. terminate TLS for HTTP, WebSocket, SSE, and gRPC;
+2. use mTLS when proxy_mtls identity is selected;
+3. bind the daemon hop only through loopback in the same pod or host;
+4. remove inbound tenant and identity headers before adding verified values; and
+5. reload certificates and keys without dropping the protected listener.
 
-## Authorization
+## Abuse controls
 
-Authentication resolves a `Principal` with exactly one tenant. Protocol adapters:
+router.max_connections and router.max_subscriptions are process caps. The corresponding
+per-tenant values prevent one principal from consuming the whole budget. Per-connection
+subscription and queue caps remain independently enforced.
 
-- reject a request tenant that differs from the principal;
-- rewrite subscription filters to the principal tenant; and
-- register core connections using the principal tenant; and
-- require the principal tenant in `auth.publish_tenants` before either publish API can
-  invoke Kafka.
+HTTP/gRPC publish and WebSocket/gRPC command rates use one-second fixed windows with
+global and per-principal limits. api.max_rate_limit_principals hard-bounds counter memory.
+HTTP returns 429, gRPC returns RESOURCE_EXHAUSTED, and WebSocket returns the stable
+rate_limited application error. Rejections increment
+router_security_limit_rejections_total.
 
-Publish permission is independent from subscription authentication. The current hook is
-a tenant allowlist; future channel, audience, or action authorization belongs in that
-explicit policy layer before `Router::subscribe` or publish. Do not encode authorization
-as a payload filter.
+## Webhook egress
 
-## Input limits
+Webhook URLs reject credentials and fragments. HTTPS and default port 443 are the
+defaults; HTTP and other ports require explicit destination configuration. Every DNS
+answer is bounded, deduplicated, and rejected if any address is private, loopback,
+link-local, documentation, benchmark, multicast, unspecified, reserved, or otherwise
+special. IPv4-mapped IPv6 addresses receive the same checks.
 
-Current controls include:
+A new redirect-disabled, no_proxy client is built for each attempt after resolution. All
+validated addresses are pinned into that client, preventing a second resolver lookup
+during connect and forcing retries to revalidate DNS. The daemon intentionally ignores
+environment egress proxies because proxy-side resolution would bypass address validation.
+Deployments requiring a corporate proxy must enforce equivalent destination resolution
+and policy outside the daemon before that mode is added.
 
-- HTTP body size;
-- Kafka payload size;
-- identifier length and control-character rejection;
-- subscriptions per connection;
-- bounded connection queues with a process-wide hard cap;
-- webhook attempt, timeout, and backoff limits; and
-- no arbitrary expression language.
+## Secrets and telemetry
 
-Publicly requested queue capacities are capped by `api.max_stream_queue_capacity`, and
-core rejects every queue above `router.max_queue_capacity`, including static webhooks.
-WebSocket frame/message sizes and per-connection command rates are bounded. Per-message
-compression remains disabled to avoid unmeasured CPU and retained-memory amplification.
-Tasks 004/005 add remaining SSE and gRPC protocol-specific controls.
+Bearer tokens, Kafka passwords, webhook signing keys, TLS private keys, JWT signing keys,
+payloads, and authorization headers must not enter logs, metrics, manifests, or repository
+history. Logs use message ids and bounded operational metadata. Tenant ids can be
+sensitive and should not be exported as unbounded metric labels.
 
-## TLS
+## Security verification
 
-The local listeners are plaintext. Production must terminate TLS either:
+The security workflow runs cargo audit, Gitleaks history scanning, and a Trivy scan of the
+built release image. The fuzz package supplies cargo-fuzz targets for Kafka header
+decoding, command JSON, webhook URLs, and protobuf messages. JWT tests cover expiry,
+issuer, audience, malformed tokens, algorithm confusion, scopes, and JWKS rotation.
+Protocol suites retain positive and cross-tenant negative cases.
 
-- in an ingress or sidecar with a protected network hop; or
-- directly in the daemon after task 009 adds certificate configuration and rotation.
-
-Webhooks require HTTPS unless the destination explicitly sets `allow_http = true`.
-Reqwest uses rustls in this workspace configuration.
-
-## Webhook SSRF controls
-
-Implemented baseline:
-
-- URL schemes restricted to HTTPS by default;
-- embedded credentials rejected;
-- fragments rejected;
-- exact hostname allowlist;
-- literal private, loopback, link-local, multicast, and unspecified addresses rejected;
-- redirects disabled; and
-- reserved security and framing headers cannot be overridden.
-
-Known gap: a DNS hostname can resolve to a private address or change resolution between
-validation and connection. Task 009 must add a resolver that validates every resolved
-address, pins or revalidates the selected address, and handles DNS rebinding. Until then,
-use operator-controlled allowlisted hostnames and egress firewall policy.
-
-## Secrets
-
-Secrets include:
-
-- bearer tokens;
-- Kafka SASL passwords;
-- webhook signing secrets;
-- TLS private keys; and
-- future JWT client credentials.
-
-They must not appear in logs, metrics, panic messages, repository history, or generated
-manifests. Kubernetes examples use secret references and placeholders only.
-
-## Logging and payload privacy
-
-The code logs message ids and Kafka coordinates but not payload bodies. New telemetry
-must classify high-cardinality and sensitive fields. Tenant id may itself be sensitive;
-production operators should decide whether to hash or omit it from exported telemetry.
-
-## Dependency and supply-chain controls
-
-CI includes formatting, Clippy, tests, dependency audit, and container build workflows.
-The committed `Cargo.lock` is enforced with `--locked`. Pin GitHub Actions to immutable commit SHAs
-before a high-assurance release. Produce an SBOM and signed image provenance in task 010.
-
-## Vulnerability reporting
-
-Use the process in the root [`SECURITY.md`](../SECURITY.md). Do not open a public issue for
-a vulnerability that enables cross-tenant access, credential disclosure, remote code
-execution, SSRF, or denial of service.
-
+Report vulnerabilities through the private process in the root SECURITY.md.

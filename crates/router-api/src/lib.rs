@@ -7,7 +7,7 @@ mod http;
 mod publish;
 mod state;
 
-pub use auth::{AuthConfig, AuthMode, Authenticator, Principal};
+pub use auth::{AuthConfig, AuthMode, Authenticator, JwtConfig, Principal, ProxyIdentity};
 pub use error::ApiError;
 pub use grpc::serve_grpc;
 pub use http::{http_router, serve_http};

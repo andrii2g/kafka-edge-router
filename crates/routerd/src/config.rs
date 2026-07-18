@@ -75,14 +75,33 @@ impl AppConfig {
     }
 
     fn validate_listener_and_limits(&self) -> anyhow::Result<()> {
-        self.server
+        let http_addr = self
+            .server
             .http_addr
             .parse::<SocketAddr>()
             .context("server.http_addr is not a socket address")?;
-        self.server
+        let grpc_addr = self
+            .server
             .grpc_addr
             .parse::<SocketAddr>()
             .context("server.grpc_addr is not a socket address")?;
+        if self.server.security_mode == SecurityMode::ProtectedProxy
+            && (!http_addr.ip().is_loopback() || !grpc_addr.ip().is_loopback())
+        {
+            bail!("protected_proxy mode requires loopback-only HTTP and gRPC listeners");
+        }
+        if self.server.security_mode == SecurityMode::ProtectedProxy
+            && self.auth.mode == AuthMode::Disabled
+        {
+            bail!("protected_proxy mode requires authentication");
+        }
+        if matches!(
+            self.auth.mode,
+            AuthMode::TrustedHeader | AuthMode::ProxyMtls
+        ) && self.server.security_mode != SecurityMode::ProtectedProxy
+        {
+            bail!("proxy identity modes require protected_proxy security mode");
+        }
         if self.api.http_body_limit_bytes == 0
             || self.api.sse_keep_alive_secs == 0
             || self.api.ws_max_message_bytes == 0
@@ -94,6 +113,11 @@ impl AppConfig {
             || self.api.grpc_keep_alive_interval_secs == 0
             || self.api.grpc_keep_alive_timeout_secs == 0
             || self.api.publish_max_payload_bytes == 0
+            || self.api.max_rate_limit_principals == 0
+            || self.api.global_commands_per_second == 0
+            || self.api.principal_commands_per_second == 0
+            || self.api.global_publishes_per_second == 0
+            || self.api.principal_publishes_per_second == 0
         {
             bail!("HTTP, SSE, WebSocket, and gRPC limits must be positive");
         }
@@ -101,6 +125,10 @@ impl AppConfig {
             || self.router.max_queue_capacity == 0
             || self.api.stream_queue_capacity == 0
             || self.api.max_stream_queue_capacity == 0
+            || self.router.max_connections == 0
+            || self.router.max_connections_per_tenant == 0
+            || self.router.max_subscriptions == 0
+            || self.router.max_subscriptions_per_tenant == 0
             || self.router.max_subscriptions_per_connection == 0
             || self.router.slow_consumer_strikes == 0
         {
@@ -161,6 +189,43 @@ impl AppConfig {
         }
         if self.auth.mode == AuthMode::StaticBearer && self.auth.bearer_tokens.is_empty() {
             bail!("auth.bearer_tokens must not be empty in static_bearer mode");
+        }
+        if self.auth.mode == AuthMode::Jwt {
+            let jwt = &self.auth.jwt;
+            if jwt.jwks_path.as_os_str().is_empty()
+                || jwt.issuer.trim().is_empty()
+                || jwt.audience.trim().is_empty()
+                || jwt.algorithms.is_empty()
+                || jwt.refresh_interval_secs == 0
+                || jwt.max_jwks_bytes == 0
+                || jwt.max_jwks_keys == 0
+                || jwt.tenant_claim.trim().is_empty()
+                || jwt.scope_claim.trim().is_empty()
+                || jwt.subscribe_scope.trim().is_empty()
+                || jwt.publish_scope.trim().is_empty()
+            {
+                bail!("JWT mode requires JWKS path, issuer, audience, algorithms, claims, scopes, and positive refresh bounds");
+            }
+            if jwt.algorithms.iter().any(|algorithm| {
+                !matches!(
+                    algorithm.as_str(),
+                    "RS256" | "RS384" | "RS512" | "ES256" | "ES384" | "EdDSA"
+                )
+            }) {
+                bail!("JWT algorithms must be asymmetric and explicitly supported");
+            }
+        }
+        if self.auth.mode == AuthMode::ProxyMtls
+            && (self.auth.proxy_identity_header.trim().is_empty()
+                || self.auth.proxy_identities.is_empty()
+                || self.auth.proxy_identities.values().any(|identity| {
+                    identity.tenant_id.trim().is_empty()
+                        || (!identity.subscribe && !identity.publish)
+                }))
+        {
+            bail!(
+                "proxy_mtls mode requires a header and bounded identities with tenant permissions"
+            );
         }
         if self
             .auth
@@ -281,6 +346,8 @@ pub struct ServerConfig {
     pub grpc_addr: String,
     /// Deadline before remaining tasks are aborted.
     pub shutdown_grace_secs: u64,
+    /// Development plaintext or mandatory loopback protected-proxy mode.
+    pub security_mode: SecurityMode,
 }
 
 impl Default for ServerConfig {
@@ -289,10 +356,21 @@ impl Default for ServerConfig {
             http_addr: default_http_addr(),
             grpc_addr: default_grpc_addr(),
             shutdown_grace_secs: default_shutdown_grace_secs(),
+            security_mode: SecurityMode::Development,
         }
     }
 }
 
+/// Public transport protection policy.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SecurityMode {
+    /// Plaintext listeners permitted for isolated development.
+    #[default]
+    Development,
+    /// TLS/mTLS terminates at a local proxy; daemon listeners must be loopback-only.
+    ProtectedProxy,
+}
 /// Kafka adapters.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -421,6 +499,7 @@ mod tests {
             signing_secret: None,
             headers: BTreeMap::new(),
             allowed_hosts: Vec::new(),
+            allowed_ports: vec![443],
             allow_private_ips: false,
             allow_http: false,
         }
@@ -533,5 +612,27 @@ mod tests {
         readiness.observability.kafka_readiness.enabled = true;
         readiness.observability.kafka_readiness.failure_threshold = 0;
         assert!(readiness.validate_observability().is_err());
+    }
+    #[test]
+    fn proxy_identity_modes_require_protected_transport() {
+        let mut config = AppConfig::default();
+        config.auth.mode = router_api::AuthMode::TrustedHeader;
+        let error = config.validate().expect_err("unprotected proxy identity");
+        assert!(error
+            .to_string()
+            .contains("proxy identity modes require protected_proxy"));
+    }
+    #[test]
+    fn protected_proxy_mode_requires_loopback_and_authentication() {
+        let mut config = AppConfig::default();
+        config.server.security_mode = super::SecurityMode::ProtectedProxy;
+        assert!(config.validate_listener_and_limits().is_err());
+
+        config.auth.mode = router_api::AuthMode::TrustedHeader;
+        assert!(config.validate_listener_and_limits().is_err());
+
+        config.server.http_addr = "127.0.0.1:8080".to_owned();
+        config.server.grpc_addr = "127.0.0.1:9090".to_owned();
+        assert!(config.validate_listener_and_limits().is_ok());
     }
 }

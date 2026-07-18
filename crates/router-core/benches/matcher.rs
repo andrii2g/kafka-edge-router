@@ -67,6 +67,7 @@ fn fan_out(criterion: &mut Criterion) {
             max_queue_capacity: 1,
             max_subscriptions_per_connection: 1,
             slow_consumer_strikes: 3,
+            ..RouterConfig::default()
         });
         let mut registrations = Vec::with_capacity(connection_count);
         for index in 0..connection_count {

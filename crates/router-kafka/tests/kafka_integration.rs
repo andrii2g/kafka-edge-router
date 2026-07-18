@@ -188,6 +188,7 @@ fn router_with_subscription() -> (
         max_queue_capacity: 64,
         max_subscriptions_per_connection: 8,
         slow_consumer_strikes: 3,
+        ..RouterConfig::default()
     }));
     let registration = router
         .register_connection("tenant-a", DeliveryProtocol::Grpc, None)
