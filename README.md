@@ -8,31 +8,19 @@ WebSocket, Server-Sent Events, gRPC, and outbound HTTP webhook subscribers.
 [![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org/)
 
 
-```text
-                         ┌─────────────────────────────┐
-                         │        Kafka cluster        │
-                         └──────────────┬──────────────┘
-                                        │
-                               rust-rdkafka consumer
-                                        │
-                         ┌──────────────▼──────────────┐
-                         │  header decoder + validator │
-                         └──────────────┬──────────────┘
-                                        │
-                         ┌──────────────▼──────────────┐
-                         │ compiled wildcard matcher   │
-                         └──────────────┬──────────────┘
-                                        │
-              ┌─────────────────────────┼────────────────────────┐
-              │                         │                        │
-     ┌────────▼────────┐      ┌─────────▼────────┐     ┌────────▼─────────┐
-     │ bounded live    │      │ bounded webhook  │     │ status / metrics │
-     │ connection hub  │      │ workers          │     │ and publish API  │
-     └───────┬─────────┘      └─────────┬────────┘     └──────────────────┘
-             │                          │
-       ┌─────┼──────┐                   ▼
-       │     │      │              HTTP callbacks
-      WS    SSE    gRPC
+```mermaid
+flowchart TB
+    kafka["Kafka cluster"] -->|rust-rdkafka consumer| decoder["header decoder + validator"]
+    decoder --> matcher["compiled wildcard matcher"]
+
+    matcher --> live["bounded live<br/>connection hub"]
+    matcher --> webhooks["bounded webhook<br/>workers"]
+    matcher --> api["status / metrics<br/>and publish API"]
+
+    live --> ws["WebSocket"]
+    live --> sse["SSE"]
+    live --> grpc["gRPC"]
+    webhooks --> callbacks["HTTP callbacks"]
 ```
 
 ## What is already implemented

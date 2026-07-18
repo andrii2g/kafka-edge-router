@@ -1,6 +1,6 @@
 //! Tonic gRPC server-streaming and bidirectional-streaming adapter.
 
-use std::{pin::Pin, sync::Arc};
+use std::{pin::Pin, sync::Arc, time::Duration};
 
 use async_stream::try_stream;
 use bytes::Bytes;
@@ -17,7 +17,7 @@ use router_proto::v1::{
     RoutedMessage as ProtoRoutedMessage, RoutingMetadata as ProtoRoutingMetadata, ServerEvent,
     StatusResponse, SubscribeCommand, SubscribeRequest,
 };
-use tokio::{net::TcpListener, sync::watch};
+use tokio::{net::TcpListener, sync::watch, task::JoinHandle};
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::{transport::Server, Request, Response, Status, Streaming};
 use tracing::warn;
@@ -30,8 +30,46 @@ pub async fn serve_grpc(
     state: ApiState,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), tonic::transport::Error> {
-    Server::builder()
-        .add_service(KafkaRouterServer::new(GrpcService { state }))
+    let config = state.config.clone();
+    let grpc_service = KafkaRouterServer::new(GrpcService {
+        state: state.clone(),
+    })
+    .max_decoding_message_size(config.grpc_max_decoding_message_bytes)
+    .max_encoding_message_size(config.grpc_max_encoding_message_bytes);
+
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    if state.health.is_ready() {
+        health_reporter
+            .set_serving::<KafkaRouterServer<GrpcService>>()
+            .await;
+    } else {
+        health_reporter
+            .set_not_serving::<KafkaRouterServer<GrpcService>>()
+            .await;
+    }
+    let health_updates = config
+        .grpc_health_enabled
+        .then(|| monitor_grpc_health(state.health.readiness(), health_reporter));
+
+    let reflection_service = config.grpc_reflection_enabled.then(|| {
+        tonic_reflection::server::Builder::configure()
+            .register_encoded_file_descriptor_set(router_proto::FILE_DESCRIPTOR_SET)
+            .build_v1()
+            .expect("the compiled router descriptor set must be valid")
+    });
+
+    let result = Server::builder()
+        .concurrency_limit_per_connection(config.grpc_concurrency_limit)
+        .load_shed(true)
+        .http2_keepalive_interval(Some(Duration::from_secs(
+            config.grpc_keep_alive_interval_secs,
+        )))
+        .http2_keepalive_timeout(Some(Duration::from_secs(
+            config.grpc_keep_alive_timeout_secs,
+        )))
+        .add_service(grpc_service)
+        .add_optional_service(config.grpc_health_enabled.then_some(health_service))
+        .add_optional_service(reflection_service)
         .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
             while !*shutdown.borrow() {
                 if shutdown.changed().await.is_err() {
@@ -39,11 +77,52 @@ pub async fn serve_grpc(
                 }
             }
         })
-        .await
+        .await;
+
+    if let Some(task) = health_updates {
+        task.abort();
+        let _ = task.await;
+    }
+    result
+}
+
+fn monitor_grpc_health(
+    mut readiness: watch::Receiver<bool>,
+    reporter: tonic_health::server::HealthReporter,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            if readiness.changed().await.is_err() {
+                return;
+            }
+            if *readiness.borrow_and_update() {
+                reporter
+                    .set_serving::<KafkaRouterServer<GrpcService>>()
+                    .await;
+            } else {
+                reporter
+                    .set_not_serving::<KafkaRouterServer<GrpcService>>()
+                    .await;
+            }
+        }
+    })
 }
 
 struct GrpcService {
     state: ApiState,
+}
+
+impl GrpcService {
+    fn authenticate<T>(
+        &self,
+        request: &Request<T>,
+        requested_tenant: Option<&str>,
+    ) -> Result<Principal, Status> {
+        self.state
+            .authenticator
+            .authenticate_grpc(request.metadata(), requested_tenant)
+            .map_err(ApiError::into_status)
+    }
 }
 
 type EventStream = Pin<Box<dyn Stream<Item = Result<ServerEvent, Status>> + Send + 'static>>;
@@ -68,11 +147,7 @@ impl KafkaRouter for GrpcService {
             .as_ref()
             .map(|filter| filter.tenant_id.as_str())
             .filter(|value| !value.is_empty());
-        let principal = self
-            .state
-            .authenticator
-            .authenticate_grpc(request.metadata(), requested_tenant)
-            .map_err(ApiError::into_status)?;
+        let principal = self.authenticate(&request, requested_tenant)?;
         let request = request.into_inner();
         let filter = request
             .filter
@@ -120,11 +195,7 @@ impl KafkaRouter for GrpcService {
         &self,
         request: Request<Streaming<ClientCommand>>,
     ) -> Result<Response<Self::ConnectStream>, Status> {
-        let principal = self
-            .state
-            .authenticator
-            .authenticate_grpc(request.metadata(), None)
-            .map_err(ApiError::into_status)?;
+        let principal = self.authenticate(&request, None)?;
         let mut incoming = request.into_inner();
         let registration = self
             .state
@@ -202,11 +273,7 @@ impl KafkaRouter for GrpcService {
     ) -> Result<Response<PublishResponse>, Status> {
         let requested_tenant = (!request.get_ref().tenant_id.is_empty())
             .then_some(request.get_ref().tenant_id.as_str());
-        let principal = self
-            .state
-            .authenticator
-            .authenticate_grpc(request.metadata(), requested_tenant)
-            .map_err(ApiError::into_status)?;
+        let principal = self.authenticate(&request, requested_tenant)?;
         let request = request.into_inner();
         authorize_tenant(&principal, Some(request.tenant_id.as_str()))
             .map_err(ApiError::into_status)?;
@@ -251,8 +318,9 @@ impl KafkaRouter for GrpcService {
 
     async fn get_status(
         &self,
-        _request: Request<GetStatusRequest>,
+        request: Request<GetStatusRequest>,
     ) -> Result<Response<StatusResponse>, Status> {
+        self.authenticate(&request, None)?;
         let status = self.state.router.status();
         Ok(Response::new(StatusResponse {
             ready: self.state.health.is_ready(),
@@ -349,5 +417,83 @@ fn proto_delivery(delivery: &Delivery) -> ServerEvent {
                 payload: delivery.message.payload.to_vec(),
             }),
         })),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use router_core::{RoutedMessage, RouterConfig, RoutingMetadata};
+
+    use super::*;
+
+    fn message(id: &str) -> Arc<RoutedMessage> {
+        Arc::new(
+            RoutedMessage::new(
+                RoutingMetadata {
+                    message_id: Arc::from(id),
+                    tenant_id: Arc::from("tenant-a"),
+                    kind: Some(Arc::from("content")),
+                    message_type: None,
+                    channel: None,
+                    actor_id: None,
+                    audience_type: None,
+                    audience_id: None,
+                    content_type: Arc::from("application/octet-stream"),
+                    timestamp_ms: None,
+                    source: None,
+                },
+                Bytes::from_static(b"payload"),
+            )
+            .expect("routed message"),
+        )
+    }
+
+    #[tokio::test]
+    async fn unpolled_grpc_receiver_is_evicted_at_the_bounded_queue_limit() {
+        let router = Arc::new(Router::new(RouterConfig {
+            default_queue_capacity: 1,
+            max_queue_capacity: 1,
+            max_subscriptions_per_connection: 1,
+            slow_consumer_strikes: 1,
+        }));
+        let config = crate::ApiConfig {
+            stream_queue_capacity: 1,
+            max_stream_queue_capacity: 1,
+            ..crate::ApiConfig::default()
+        };
+        let state = ApiState::new(
+            Arc::clone(&router),
+            crate::AuthConfig {
+                default_tenant: Some("tenant-a".to_owned()),
+                ..crate::AuthConfig::default()
+            },
+            None,
+            Arc::new(crate::HealthState::default()),
+            config,
+        );
+        let service = GrpcService { state };
+        let response = service
+            .subscribe(Request::new(SubscribeRequest {
+                subscription_id: "slow".to_owned(),
+                filter: Some(ProtoRouteFilter {
+                    tenant_id: "tenant-a".to_owned(),
+                    kind: Some("content".to_owned()),
+                    ..ProtoRouteFilter::default()
+                }),
+                queue_capacity: Some(1),
+            }))
+            .await
+            .expect("subscribe");
+
+        assert_eq!(router.dispatch(message("first")).delivered_connections, 1);
+        let second = router.dispatch(message("second"));
+        assert_eq!(second.full_connections, 1);
+        assert_eq!(router.status().active_connections, 0);
+        assert_eq!(router.status().subscriptions, 0);
+
+        drop(response);
     }
 }

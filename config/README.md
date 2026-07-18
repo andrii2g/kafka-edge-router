@@ -23,3 +23,17 @@ Run `routerd --check-config` before deploying a change.
 `api.ws_max_commands_per_second` is a per-connection fixed-window application-command
 budget. All values must be positive. Queue requests remain independently capped by
 `api.max_stream_queue_capacity` and `router.max_queue_capacity`.
+
+## gRPC limits and discovery
+
+`api.grpc_max_decoding_message_bytes` and
+`api.grpc_max_encoding_message_bytes` bound individual messages.
+`api.grpc_concurrency_limit` limits concurrent requests per HTTP/2 connection; excess
+requests are load-shed with `RESOURCE_EXHAUSTED`.
+`api.grpc_keep_alive_interval_secs` and `api.grpc_keep_alive_timeout_secs` configure
+HTTP/2 keepalive pings and acknowledgement deadlines. These numeric settings must be
+positive.
+
+`api.grpc_health_enabled` exposes the standard gRPC health service and tracks daemon
+readiness. `api.grpc_reflection_enabled` exposes gRPC reflection v1. Reflection is useful
+in the local configuration but should remain `false` in production.

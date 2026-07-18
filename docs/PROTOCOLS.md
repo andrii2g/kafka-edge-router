@@ -176,12 +176,45 @@ Services:
 - `Publish`: raw byte payload to Kafka;
 - `GetStatus`: operational counters.
 
-In disabled auth mode, bidirectional `Connect` needs `auth.default_tenant` because no
-first-message tenant is trusted before the stream is established. In authenticated
-modes, metadata resolves the tenant.
+Every `KafkaRouter` RPC uses the shared gRPC authentication layer. In disabled auth
+mode, bidirectional `Connect` and `GetStatus` need `auth.default_tenant` because
+there is no request tenant to resolve. In authenticated modes, metadata resolves the
+tenant. `Subscribe` and `Publish` still compare the requested tenant with that
+principal and reject a mismatch.
+
+Fixed `Subscribe` queues use the configured default unless `queue_capacity` is
+present. Values outside `1..=api.max_stream_queue_capacity` are rejected. `Connect`
+uses `api.stream_queue_capacity`; core slow-consumer policy disconnects either stream
+when its bounded queue remains full.
+
+Stable status mapping:
+
+| Condition | gRPC code |
+|---|---|
+| Missing or invalid credentials | `UNAUTHENTICATED` |
+| Tenant mismatch | `PERMISSION_DENIED` |
+| Missing filter/oneof, duplicate subscription, or invalid queue | `INVALID_ARGUMENT` |
+| Decoded request exceeds `api.grpc_max_decoding_message_bytes` | `OUT_OF_RANGE` |
+| Kafka publisher is disabled | `FAILED_PRECONDITION` |
+| Kafka publish backend failure | `INTERNAL` |
+| Per-connection concurrency is saturated | `RESOURCE_EXHAUSTED` |
+
+The server applies `api.grpc_max_decoding_message_bytes` and
+`api.grpc_max_encoding_message_bytes` to every router method. It limits concurrent
+requests per HTTP/2 connection with `api.grpc_concurrency_limit` and enables immediate
+load shedding rather than buffering excess requests. HTTP/2 keepalive uses
+`api.grpc_keep_alive_interval_secs` and `api.grpc_keep_alive_timeout_secs`.
+
+The standard `grpc.health.v1.Health` service is controlled by
+`api.grpc_health_enabled` and reports `router.v1.KafkaRouter` from the daemon readiness
+gate. The gRPC reflection v1 service is controlled by
+`api.grpc_reflection_enabled`; enable it for local inspection and keep it disabled in
+production.
 
 Do not renumber or reuse protobuf fields. Additive fields should be optional where old
-clients can safely omit them.
+clients can safely omit them. Task 005 changed server behavior and generated descriptors,
+not the published `router.v1` message schema, so existing generated clients remain
+source compatible.
 
 ## HTTP publish
 
