@@ -8,6 +8,9 @@ http_body_limit_bytes = 1048576
 stream_queue_capacity = 512
 max_stream_queue_capacity = 8192
 sse_keep_alive_secs = 15
+ws_max_message_bytes = 65536
+ws_max_frame_bytes = 65536
+ws_max_commands_per_second = 32
 
 [router]
 default_queue_capacity = 512

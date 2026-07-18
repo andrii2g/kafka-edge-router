@@ -2,6 +2,18 @@
 
 This file is authoritative for automated contributors working in this repository.
 
+## Agent autonomy
+
+When assigned an implementation task:
+
+- Inspect the repository immediately.
+- Do not ask permission to read files, edit workspace files, restore dependencies, compile, lint, or run tests.
+- Implement, validate, and report the result in the same task.
+- Resolve ordinary ambiguity using established project conventions.
+- Prefer a reasonable working implementation over asking optional questions.
+- Ask only when blocked by missing credentials, an irreversible/destructive operation, deployment or publication, remote mutations, material cost, or genuinely unknowable business requirements.
+- Never ask "Should I proceed?", "Should I build?", or "Should I run tests?" when those actions are necessary to complete the requested task.
+
 ## Mission
 
 Implement and harden a low-latency Kafka edge router without compromising tenant
