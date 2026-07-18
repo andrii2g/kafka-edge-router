@@ -9,4 +9,4 @@ pub use config::{
     DurableWebhookConfig, WebhookConfig, WebhookDeliveryMode, WebhookDestinationConfig,
 };
 pub use manager::{WebhookError, WebhookManager};
-pub use security::validate_destination_url;
+pub use security::{pinned_client, validate_destination_port, validate_destination_url};

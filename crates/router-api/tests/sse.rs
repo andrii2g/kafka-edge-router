@@ -54,6 +54,7 @@ fn router_config(slow_consumer_strikes: u32) -> RouterConfig {
         max_queue_capacity: 8,
         max_subscriptions_per_connection: 4,
         slow_consumer_strikes,
+        ..RouterConfig::default()
     }
 }
 

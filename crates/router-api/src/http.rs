@@ -33,7 +33,10 @@ use tokio::{net::TcpListener, sync::watch};
 use tower_http::{catch_panic::CatchPanicLayer, limit::RequestBodyLimitLayer, trace::TraceLayer};
 use tracing::{debug, info_span, warn, Instrument as _};
 
-use crate::{state::ConnectionGuard, ApiError, ApiState, Principal};
+use crate::{
+    state::{ConnectionGuard, RateKind},
+    ApiError, ApiState, Principal,
+};
 
 /// Builds the complete public HTTP application.
 pub fn http_router(state: ApiState) -> AxumRouter {
@@ -201,6 +204,9 @@ async fn publish_http_inner(
         .authenticate_http(headers, request.tenant_id.as_deref())?;
     authorize_requested_tenant(&principal, request.tenant_id.as_deref())?;
     state.authenticator.authorize_publish(&principal)?;
+    if !state.allow_rate(&principal.tenant_id, RateKind::Publish) {
+        return Err(ApiError::RateLimited);
+    }
 
     let (payload, content_type) = http_publish_payload(
         request.payload,
@@ -301,6 +307,7 @@ async fn websocket(
         .authenticator
         .authenticate_http(&headers, query.tenant_id.as_deref())?;
     authorize_requested_tenant(&principal, query.tenant_id.as_deref())?;
+    state.authenticator.authorize_subscribe(&principal)?;
     let queue_capacity = stream_queue_capacity(&state, query.queue_capacity)?;
     let max_message_bytes = state.config.ws_max_message_bytes;
     let max_frame_bytes = state.config.ws_max_frame_bytes;
@@ -387,7 +394,9 @@ async fn websocket_session(
                 };
                 match message {
                     Ok(Message::Text(text)) => {
-                        let response = if rate_limiter.allow() {
+                        let response = if rate_limiter.allow()
+                            && state.allow_rate(&principal.tenant_id, RateKind::Command)
+                        {
                             handle_ws_command(
                                 &state,
                                 &principal,
@@ -402,7 +411,9 @@ async fn websocket_session(
                         }
                     }
                     Ok(Message::Binary(_)) => {
-                        let response = if rate_limiter.allow() {
+                        let response = if rate_limiter.allow()
+                            && state.allow_rate(&principal.tenant_id, RateKind::Command)
+                        {
                             ws_error("binary_not_supported", "binary commands are not supported")
                         } else {
                             ws_error("rate_limited", "command rate limit exceeded")
@@ -554,10 +565,12 @@ fn ws_subscribe_error(error: &CoreError) -> String {
         CoreError::SubscriptionExists => {
             ws_error("subscription_exists", "subscription_id already exists")
         }
-        CoreError::SubscriptionLimitReached => ws_error(
-            "subscription_limit_reached",
-            "connection subscription limit reached",
-        ),
+        CoreError::SubscriptionLimitReached | CoreError::GlobalSubscriptionLimitReached => {
+            ws_error(
+                "subscription_limit_reached",
+                "connection subscription limit reached",
+            )
+        }
         CoreError::TenantMismatch => ws_error("tenant_mismatch", "filter tenant is not authorized"),
         CoreError::ConnectionNotFound => {
             ws_error("connection_closed", "connection is no longer registered")
@@ -565,7 +578,9 @@ fn ws_subscribe_error(error: &CoreError) -> String {
         CoreError::InvalidIdentifier { .. }
         | CoreError::IncompleteAudience
         | CoreError::MissingField(_) => ws_error("invalid_filter", "filter is invalid"),
-        CoreError::SubscriptionNotFound | CoreError::InvalidQueueCapacity { .. } => {
+        CoreError::SubscriptionNotFound
+        | CoreError::ConnectionLimitReached
+        | CoreError::InvalidQueueCapacity { .. } => {
             ws_error("subscribe_failed", "subscription could not be created")
         }
     }
@@ -667,6 +682,7 @@ async fn sse(
     let principal = state
         .authenticator
         .authenticate_http(&headers, query.tenant_id.as_deref())?;
+    state.authenticator.authorize_subscribe(&principal)?;
     parse_last_event_id(&headers)?;
     let (filter, subscription_id, requested_queue_capacity) = query.into_filter(&principal)?;
     let subscription_id = SubscriptionId::new(subscription_id)

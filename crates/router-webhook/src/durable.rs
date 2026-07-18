@@ -17,7 +17,7 @@ use rdkafka::{
     topic_partition_list::{Offset, TopicPartitionList},
     ClientConfig, Message,
 };
-use reqwest::{redirect::Policy, Client, Url};
+use reqwest::Url;
 use router_core::{
     encode_delivery_json, ConnectionId, Delivery, DeliveryProtocol, LatencyStage, Metrics,
     RouteKey, RoutedMessage, Router, SubscriptionId, TraceContext,
@@ -33,8 +33,8 @@ use uuid::Uuid;
 
 use crate::{
     manager::{parse_headers, retryable_status, signature},
-    validate_destination_url, DurableWebhookConfig, WebhookConfig, WebhookDestinationConfig,
-    WebhookError,
+    pinned_client, validate_destination_port, validate_destination_url, DurableWebhookConfig,
+    WebhookConfig, WebhookDestinationConfig, WebhookError,
 };
 
 const SCHEMA_VERSION: u16 = 1;
@@ -561,7 +561,8 @@ impl DurableWorker {
 struct DurableEndpoint {
     id: String,
     url: Url,
-    client: Client,
+    allow_private_ips: bool,
+    timeout: Duration,
     headers: Vec<(HeaderName, HeaderValue)>,
     signing_secret: Option<Vec<u8>>,
     max_attempts: u32,
@@ -577,16 +578,12 @@ impl DurableEndpoint {
             config.allow_private_ips,
             config.allow_http,
         )?;
-        let client = Client::builder()
-            .redirect(Policy::none())
-            .connect_timeout(Duration::from_millis(config.timeout_ms))
-            .timeout(Duration::from_millis(config.timeout_ms))
-            .build()
-            .map_err(WebhookError::Client)?;
+        validate_destination_port(&url, &config.allowed_ports)?;
         Ok(Self {
             id: config.id,
             url,
-            client,
+            allow_private_ips: config.allow_private_ips,
+            timeout: Duration::from_millis(config.timeout_ms.max(1)),
             headers: parse_headers(&config.headers)?,
             signing_secret: config.signing_secret.map(String::into_bytes),
             max_attempts: config.max_attempts,
@@ -596,8 +593,11 @@ impl DurableEndpoint {
     }
 
     async fn send_attempt(&self, body: &[u8], message_id: &str, attempt: u32) -> AttemptOutcome {
-        let mut request = self
-            .client
+        let Ok(client) = pinned_client(&self.url, self.allow_private_ips, self.timeout).await
+        else {
+            return AttemptOutcome::Failed(FailureClass::Connect);
+        };
+        let mut request = client
             .post(self.url.clone())
             .header("content-type", "application/json")
             .header(
@@ -804,6 +804,8 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::{should_retry, DurableEndpoint, FailureClass};
 
     #[test]
@@ -819,7 +821,8 @@ mod tests {
         let endpoint = DurableEndpoint {
             id: "test".to_owned(),
             url: "https://example.com".parse().expect("URL"),
-            client: reqwest::Client::new(),
+            allow_private_ips: false,
+            timeout: Duration::from_secs(1),
             headers: Vec::new(),
             signing_secret: None,
             max_attempts: 8,
@@ -1157,6 +1160,11 @@ mod kafka_tests {
                 signing_secret: Some("test-secret".to_owned()),
                 headers: BTreeMap::new(),
                 allowed_hosts: vec!["127.0.0.1".to_owned()],
+                allowed_ports: vec![url
+                    .parse::<reqwest::Url>()
+                    .expect("webhook URL")
+                    .port_or_known_default()
+                    .expect("webhook port")],
                 allow_private_ips: true,
                 allow_http: true,
             }],

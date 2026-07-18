@@ -28,6 +28,22 @@ fn default_subscription_limit() -> usize {
     128
 }
 
+fn default_connection_limit() -> usize {
+    10_000
+}
+
+fn default_tenant_connection_limit() -> usize {
+    1_000
+}
+
+fn default_global_subscription_limit() -> usize {
+    100_000
+}
+
+fn default_tenant_subscription_limit() -> usize {
+    10_000
+}
+
 fn default_slow_consumer_strikes() -> u32 {
     3
 }
@@ -40,6 +56,14 @@ pub struct RouterConfig {
     pub default_queue_capacity: usize,
     /// Hard cap for every live-client and webhook queue registered in the process.
     pub max_queue_capacity: usize,
+    /// Maximum active connections in the process.
+    pub max_connections: usize,
+    /// Maximum active connections for one authenticated tenant.
+    pub max_connections_per_tenant: usize,
+    /// Maximum active subscriptions in the process.
+    pub max_subscriptions: usize,
+    /// Maximum active subscriptions for one authenticated tenant.
+    pub max_subscriptions_per_tenant: usize,
     /// Maximum subscriptions on one connection.
     pub max_subscriptions_per_connection: usize,
     /// Consecutive queue-full outcomes before disconnecting a consumer.
@@ -51,6 +75,10 @@ impl Default for RouterConfig {
         Self {
             default_queue_capacity: default_queue_capacity(),
             max_queue_capacity: default_max_queue_capacity(),
+            max_connections: default_connection_limit(),
+            max_connections_per_tenant: default_tenant_connection_limit(),
+            max_subscriptions: default_global_subscription_limit(),
+            max_subscriptions_per_tenant: default_tenant_subscription_limit(),
             max_subscriptions_per_connection: default_subscription_limit(),
             slow_consumer_strikes: default_slow_consumer_strikes(),
         }
@@ -150,6 +178,21 @@ impl Router {
                 maximum: self.config.max_queue_capacity,
             });
         }
+        let _mutation_guard = self
+            .mutation_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.connections.len() >= self.config.max_connections
+            || self
+                .connections
+                .iter()
+                .filter(|connection| connection.tenant_id.as_ref() == tenant_id)
+                .count()
+                >= self.config.max_connections_per_tenant
+        {
+            self.metrics.record_security_limit_rejection();
+            return Err(CoreError::ConnectionLimitReached);
+        }
         let (sender, receiver) = mpsc::channel(capacity);
         let connection_id = ConnectionId::new();
         let previous = self.connections.insert(
@@ -183,6 +226,28 @@ impl Router {
             .mutation_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tenant_id = self
+            .connections
+            .get(&connection_id)
+            .map(|connection| Arc::clone(&connection.tenant_id))
+            .ok_or(CoreError::ConnectionNotFound)?;
+        let total_subscriptions: usize = self
+            .connections
+            .iter()
+            .map(|connection| connection.subscriptions.len())
+            .sum();
+        let tenant_subscriptions: usize = self
+            .connections
+            .iter()
+            .filter(|connection| connection.tenant_id == tenant_id)
+            .map(|connection| connection.subscriptions.len())
+            .sum();
+        if total_subscriptions >= self.config.max_subscriptions
+            || tenant_subscriptions >= self.config.max_subscriptions_per_tenant
+        {
+            self.metrics.record_security_limit_rejection();
+            return Err(CoreError::GlobalSubscriptionLimitReached);
+        }
         let protocol = {
             let mut connection = self
                 .connections
@@ -435,6 +500,10 @@ mod tests {
         RouterConfig {
             default_queue_capacity: 1,
             max_queue_capacity: 16,
+            max_connections: 100,
+            max_connections_per_tenant: 100,
+            max_subscriptions: 100,
+            max_subscriptions_per_tenant: 100,
             max_subscriptions_per_connection: 10,
             slow_consumer_strikes,
         }
@@ -539,10 +608,85 @@ mod tests {
     }
 
     #[test]
+    fn enforces_global_and_per_tenant_connection_limits_with_cleanup() {
+        let router = Router::new(RouterConfig {
+            max_connections: 2,
+            max_connections_per_tenant: 1,
+            ..RouterConfig::default()
+        });
+        let tenant_a = router
+            .register_connection("tenant-a", DeliveryProtocol::WebSocket, None)
+            .expect("first tenant connection");
+        assert!(matches!(
+            router.register_connection("tenant-a", DeliveryProtocol::Sse, None),
+            Err(CoreError::ConnectionLimitReached)
+        ));
+        let tenant_b = router
+            .register_connection("tenant-b", DeliveryProtocol::Grpc, None)
+            .expect("second tenant connection");
+        assert!(matches!(
+            router.register_connection("tenant-c", DeliveryProtocol::Sse, None),
+            Err(CoreError::ConnectionLimitReached)
+        ));
+
+        router.unregister_connection(tenant_a.connection_id);
+        assert!(router
+            .register_connection("tenant-c", DeliveryProtocol::Sse, None)
+            .is_ok());
+        router.unregister_connection(tenant_b.connection_id);
+    }
+
+    #[test]
+    fn enforces_global_and_per_tenant_subscription_limits() {
+        let router = Router::new(RouterConfig {
+            max_subscriptions: 2,
+            max_subscriptions_per_tenant: 1,
+            max_subscriptions_per_connection: 2,
+            ..RouterConfig::default()
+        });
+        let tenant_a = router
+            .register_connection("tenant-a", DeliveryProtocol::WebSocket, None)
+            .expect("tenant a");
+        let tenant_b = router
+            .register_connection("tenant-b", DeliveryProtocol::Grpc, None)
+            .expect("tenant b");
+        subscribe_all(&router, tenant_a.connection_id, "a-1");
+        assert!(matches!(
+            router.subscribe(
+                tenant_a.connection_id,
+                SubscriptionId::new("a-2").expect("id"),
+                filter("tenant-a", Some("other")),
+            ),
+            Err(CoreError::GlobalSubscriptionLimitReached)
+        ));
+        router
+            .subscribe(
+                tenant_b.connection_id,
+                SubscriptionId::new("b-1").expect("id"),
+                filter("tenant-b", None),
+            )
+            .expect("global exact boundary");
+        let tenant_c = router
+            .register_connection("tenant-c", DeliveryProtocol::Sse, None)
+            .expect("tenant c");
+        assert!(matches!(
+            router.subscribe(
+                tenant_c.connection_id,
+                SubscriptionId::new("c-1").expect("id"),
+                filter("tenant-c", None),
+            ),
+            Err(CoreError::GlobalSubscriptionLimitReached)
+        ));
+    }
+    #[test]
     fn queue_capacity_accepts_exact_limit_and_rejects_zero_and_over_limit() {
         let router = Router::new(RouterConfig {
             default_queue_capacity: 4,
             max_queue_capacity: 8,
+            max_connections: 100,
+            max_connections_per_tenant: 100,
+            max_subscriptions: 100,
+            max_subscriptions_per_tenant: 100,
             max_subscriptions_per_connection: 10,
             slow_consumer_strikes: 2,
         });

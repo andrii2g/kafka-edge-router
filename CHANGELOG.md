@@ -6,6 +6,10 @@ All notable changes will be documented here. The project follows Semantic Versio
 
 ## Unreleased
 
+- Added reloadable asymmetric JWT/JWKS validation, explicit subscribe/publish scopes, proxy-mTLS identity mapping, and loopback-only protected proxy mode.
+- Hardened webhook egress with per-attempt DNS validation and pinning, special-address rejection, direct-only proxy policy, redirect blocking, and destination port allowlists.
+- Added global/per-tenant connection and subscription caps, bounded global/per-principal command and publish rates, rejection metrics, fuzz harnesses, secret scanning, and container scanning.
+
 - Added fixed-bucket latency histograms for decode, match, enqueue, protocol write, webhook
   attempts, publish, and end-to-end handling.
 - Added bounded protocol gauges, Kafka lag/assignment metrics, W3C trace propagation, optional

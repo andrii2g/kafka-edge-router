@@ -9,7 +9,7 @@ use std::{
 use bytes::Bytes;
 use hmac::{Hmac, KeyInit, Mac};
 use http::{HeaderName, HeaderValue, StatusCode};
-use reqwest::{redirect::Policy, Client, Url};
+use reqwest::Url;
 use router_core::{
     encode_delivery_json, ConnectionId, Delivery, DeliveryProtocol, LatencyStage, Router,
     SubscriptionId,
@@ -22,7 +22,8 @@ use tracing::{debug, error, info, info_span, warn, Instrument as _};
 
 use crate::{
     durable::{build_durable_runtime, DurableWebhookSink, DurableWorker},
-    validate_destination_url, WebhookConfig, WebhookDeliveryMode, WebhookDestinationConfig,
+    pinned_client, validate_destination_port, validate_destination_url, WebhookConfig,
+    WebhookDeliveryMode, WebhookDestinationConfig,
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -175,7 +176,8 @@ impl WebhookManager {
 struct WebhookWorker {
     id: String,
     url: Url,
-    client: Client,
+    allow_private_ips: bool,
+    timeout: Duration,
     headers: Vec<(HeaderName, HeaderValue)>,
     signing_secret: Option<Vec<u8>>,
     max_attempts: u32,
@@ -194,12 +196,7 @@ impl WebhookWorker {
             config.allow_private_ips,
             config.allow_http,
         )?;
-        let client = Client::builder()
-            .redirect(Policy::none())
-            .connect_timeout(Duration::from_millis(config.timeout_ms.max(1)))
-            .timeout(Duration::from_millis(config.timeout_ms.max(1)))
-            .build()
-            .map_err(WebhookError::Client)?;
+        validate_destination_port(&url, &config.allowed_ports)?;
         let headers = parse_headers(&config.headers)?;
 
         let registration = router
@@ -234,7 +231,8 @@ impl WebhookWorker {
         Ok(Self {
             id: config.id,
             url,
-            client,
+            allow_private_ips: config.allow_private_ips,
+            timeout: Duration::from_millis(config.timeout_ms.max(1)),
             headers,
             signing_secret: config.signing_secret.map(String::into_bytes),
             max_attempts: config.max_attempts.max(1),
@@ -249,7 +247,7 @@ impl WebhookWorker {
     }
 
     async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> Result<(), String> {
-        info!(webhook_id = %self.id, url = %self.url, "webhook worker started");
+        info!(webhook_id = %self.id, "webhook worker started");
         loop {
             if *shutdown.borrow() {
                 break;
@@ -347,8 +345,11 @@ impl WebhookWorker {
     }
 
     async fn send_attempt(&self, body: &Bytes, message_id: &str, attempt: u32) -> AttemptResult {
-        let mut request = self
-            .client
+        let client = match pinned_client(&self.url, self.allow_private_ips, self.timeout).await {
+            Ok(client) => client,
+            Err(error) => return AttemptResult::Permanent(error.to_string()),
+        };
+        let mut request = client
             .post(self.url.clone())
             .header("content-type", "application/json")
             .header(

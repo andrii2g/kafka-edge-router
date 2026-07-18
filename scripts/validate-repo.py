@@ -18,7 +18,7 @@ import tree_sitter_rust
 
 ROOT = Path(__file__).resolve().parents[1]
 ERRORS: list[str] = []
-EXCLUDED_PARTS = {".git", "target"}
+EXCLUDED_PARTS = {".git", ".vs", "target"}
 
 
 def repository_paths(pattern: str):

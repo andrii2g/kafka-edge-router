@@ -135,6 +135,7 @@ pub struct Metrics {
     full_connections: AtomicU64,
     closed_connections: AtomicU64,
     slow_consumer_disconnects: AtomicU64,
+    security_limit_rejections: AtomicU64,
     websocket_opened: AtomicU64,
     sse_opened: AtomicU64,
     grpc_opened: AtomicU64,
@@ -270,6 +271,12 @@ impl Metrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Records a request rejected by a bounded security or abuse limit.
+    pub fn record_security_limit_rejection(&self) {
+        self.security_limit_rejections
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Records one outbound webhook attempt.
     pub fn record_webhook_attempt(&self) {
         self.webhook_attempts.fetch_add(1, Ordering::Relaxed);
@@ -352,6 +359,7 @@ impl Metrics {
             full_connections: self.full_connections.load(Ordering::Relaxed),
             closed_connections: self.closed_connections.load(Ordering::Relaxed),
             slow_consumer_disconnects: self.slow_consumer_disconnects.load(Ordering::Relaxed),
+            security_limit_rejections: self.security_limit_rejections.load(Ordering::Relaxed),
             websocket_opened: self.websocket_opened.load(Ordering::Relaxed),
             sse_opened: self.sse_opened.load(Ordering::Relaxed),
             grpc_opened: self.grpc_opened.load(Ordering::Relaxed),
@@ -413,6 +421,8 @@ pub struct MetricsSnapshot {
     pub closed_connections: u64,
     /// Connections removed after repeated queue saturation.
     pub slow_consumer_disconnects: u64,
+    /// Requests rejected by bounded security and abuse limits.
+    pub security_limit_rejections: u64,
     /// WebSocket connections opened since process start.
     pub websocket_opened: u64,
     /// SSE connections opened since process start.
@@ -512,6 +522,10 @@ pub fn render_prometheus(
             "router_closed_connections_total {}\n",
             "# TYPE router_slow_consumer_disconnects_total counter\n",
             "router_slow_consumer_disconnects_total {}\n",
+            "# TYPE router_security_limit_rejections_total counter
+",
+            "router_security_limit_rejections_total {}
+",
             "# TYPE router_connections gauge\n",
             "router_connections {}\n",
             "# TYPE router_subscriptions gauge\n",
@@ -559,6 +573,7 @@ pub fn render_prometheus(
         metrics.full_connections,
         metrics.closed_connections,
         metrics.slow_consumer_disconnects,
+        metrics.security_limit_rejections,
         active_connections,
         subscriptions,
         metrics.websocket_opened,

@@ -1,4 +1,5 @@
 [server]
+security_mode = "development"
 http_addr = "0.0.0.0:8080"
 grpc_addr = "0.0.0.0:9090"
 shutdown_grace_secs = 10
@@ -19,10 +20,19 @@ grpc_keep_alive_timeout_secs = 10
 grpc_health_enabled = true
 grpc_reflection_enabled = true
 publish_max_payload_bytes = 1048576
+max_rate_limit_principals = 10000
+global_commands_per_second = 10000
+principal_commands_per_second = 64
+global_publishes_per_second = 1000
+principal_publishes_per_second = 32
 
 [router]
 default_queue_capacity = 256
 max_queue_capacity = 4096
+max_connections = 10000
+max_connections_per_tenant = 1000
+max_subscriptions = 100000
+max_subscriptions_per_tenant = 10000
 max_subscriptions_per_connection = 128
 slow_consumer_strikes = 3
 
