@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM rust:1.97-bookworm AS build
+FROM rust:1.88-bookworm AS build
 WORKDIR /workspace
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
