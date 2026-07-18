@@ -33,7 +33,7 @@ All notable changes will be documented here. The project follows Semantic Versio
   `cargo audit` with 305 locked dependencies scanned.
 - Passed `python scripts/validate-repo.py`: 118 files, 29 Rust, 12 TOML, 15 YAML,
   and 39 Markdown files validated.
-- `docker build --pull -t rust-kafka-edge-router:task-000 .` was attempted but could
+- `docker build --pull -t kafka-edge-router:task-000 .` was attempted but could
   not run because no Docker-compatible CLI is installed; no container digest is available.
 - The Kafka/WS/SSE manual smoke test remains deferred because Docker is unavailable.
 

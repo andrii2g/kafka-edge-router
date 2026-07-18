@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "HTTP, WebSocket, SSE, and gRPC adapters for rust-kafka-edge-router"
+description = "HTTP, WebSocket, SSE, and gRPC adapters for kafka-edge-router"
 
 [dependencies]
 async-stream.workspace = true

@@ -1,10 +1,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: rust-kafka-edge-router
+  name: kafka-edge-router
   namespace: kafka-router
   labels:
-    app.kubernetes.io/name: rust-kafka-edge-router
+    app.kubernetes.io/name: kafka-edge-router
 spec:
   replicas: 3
   revisionHistoryLimit: 5
@@ -15,11 +15,11 @@ spec:
       maxSurge: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: rust-kafka-edge-router
+      app.kubernetes.io/name: kafka-edge-router
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: rust-kafka-edge-router
+        app.kubernetes.io/name: kafka-edge-router
     spec:
       terminationGracePeriodSeconds: 35
       automountServiceAccountToken: false
@@ -88,7 +88,7 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: rust-kafka-edge-router
+            name: kafka-edge-router
         - name: tmp
           emptyDir: {}
       topologySpreadConstraints:
@@ -97,4 +97,4 @@ spec:
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
-              app.kubernetes.io/name: rust-kafka-edge-router
+              app.kubernetes.io/name: kafka-edge-router

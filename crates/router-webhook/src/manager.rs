@@ -258,7 +258,7 @@ impl WebhookWorker {
             .header("content-type", "application/json")
             .header(
                 "user-agent",
-                concat!("rust-kafka-edge-router/", env!("CARGO_PKG_VERSION")),
+                concat!("kafka-edge-router/", env!("CARGO_PKG_VERSION")),
             )
             .header("x-router-message-id", message_id)
             .header("idempotency-key", message_id)

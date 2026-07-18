@@ -60,6 +60,6 @@ jobs:
         with:
           context: .
           push: false
-          tags: rust-kafka-edge-router:ci
+          tags: kafka-edge-router:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Kafka ingestion and publishing adapters for rust-kafka-edge-router"
+description = "Kafka ingestion and publishing adapters for kafka-edge-router"
 
 [dependencies]
 async-trait.workspace = true

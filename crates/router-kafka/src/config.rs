@@ -9,15 +9,15 @@ fn default_brokers() -> String {
 }
 
 fn default_group_id() -> String {
-    "rust-kafka-edge-router-local".to_owned()
+    "kafka-edge-router-local".to_owned()
 }
 
 fn default_consumer_client_id() -> String {
-    "rust-kafka-edge-router-consumer".to_owned()
+    "kafka-edge-router-consumer".to_owned()
 }
 
 fn default_producer_client_id() -> String {
-    "rust-kafka-edge-router-producer".to_owned()
+    "kafka-edge-router-producer".to_owned()
 }
 
 fn default_topic() -> String {

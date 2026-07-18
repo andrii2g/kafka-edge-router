@@ -40,4 +40,4 @@ validate: ## Run repository checks available without a Rust toolchain
 	python scripts/validate-repo.py
 
 docker: ## Build the runtime container
-	docker build -t rust-kafka-edge-router:local .
+	docker build -t kafka-edge-router:local .

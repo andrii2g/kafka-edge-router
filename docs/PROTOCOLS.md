@@ -181,7 +181,7 @@ One destination has one ordered worker. Requests contain:
 
 ```text
 content-type: application/json
-user-agent: rust-kafka-edge-router/<version>
+user-agent: kafka-edge-router/<version>
 x-router-message-id: <message id>
 idempotency-key: <message id>
 x-router-attempt: <1-based attempt>

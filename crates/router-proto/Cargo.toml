@@ -4,7 +4,7 @@ version.workspace = true
 edition = "2021"
 rust-version.workspace = true
 license.workspace = true
-description = "Protocol Buffer contracts for rust-kafka-edge-router"
+description = "Protocol Buffer contracts for kafka-edge-router"
 build = "build.rs"
 
 [dependencies]
