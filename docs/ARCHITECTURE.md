@@ -250,7 +250,7 @@ Startup order:
 3. construct router, Kafka producer/consumer, and webhook workers;
 4. bind HTTP and gRPC listeners;
 5. spawn supervised components;
-6. set readiness true.
+6. set readiness immediately, or after Kafka health reaches its configured success threshold.
 
 Shutdown order:
 
@@ -260,7 +260,7 @@ Shutdown order:
 4. stop Kafka intake and graceful servers;
 5. drain tasks until the configured deadline;
 6. abort remaining tasks;
-7. set liveness false and exit.
+7. set liveness false, flush the tracer provider to its deadline, and exit.
 
 Kubernetes should provide a termination grace period longer than the daemon's internal
 grace period.
@@ -299,8 +299,8 @@ generation fencing, retransmission policy, peer backpressure, and failure tests.
 
 ## Failure domains
 
-- Kafka unavailable: consumer/producer log errors; readiness policy can later include
-  broker health. Current readiness represents constructed and bound components.
+- Kafka unavailable: consumer/producer log errors; optional hysteretic Kafka readiness becomes
+  false after the configured consecutive failures.
 - One live client slow: only that bounded queue drops and eventually disconnects.
 - One webhook slow: only that destination worker retries and its queue can saturate.
 - Protocol server exits: supervisor initiates process shutdown.
@@ -314,7 +314,6 @@ Safe extension points include:
 
 - an authorization policy called before core subscription;
 
-- OpenTelemetry spans around decode, match, enqueue, and network write;
 - a route-index actor implementation if benchmarks show lock contention;
 - peer forwarding behind a separate internal crate and ADR; and
 - a durable subscription mode with an independent protocol contract.

@@ -25,13 +25,13 @@ use futures_util::{SinkExt, StreamExt};
 use http::{header, HeaderMap, HeaderValue, StatusCode};
 use router_core::{
     encode_delivery_json, render_prometheus, ConnectionId, CoreError, DeliveryProtocol,
-    PublishCommand, PublishErrorKind, PublishProtocol, RouteFilter, SubscriptionId,
+    LatencyStage, PublishCommand, PublishErrorKind, PublishProtocol, RouteFilter, SubscriptionId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::{net::TcpListener, sync::watch};
 use tower_http::{catch_panic::CatchPanicLayer, limit::RequestBodyLimitLayer, trace::TraceLayer};
-use tracing::{debug, warn};
+use tracing::{debug, info_span, warn, Instrument as _};
 
 use crate::{state::ConnectionGuard, ApiError, ApiState, Principal};
 
@@ -102,7 +102,7 @@ async fn status(State(state): State<ApiState>) -> Json<Value> {
 async fn metrics(State(state): State<ApiState>) -> Response {
     let status = state.router.status();
     let body = render_prometheus(
-        status.metrics,
+        &status.metrics,
         status.active_connections,
         status.subscriptions,
     );
@@ -171,7 +171,12 @@ async fn publish(
         .router
         .metrics()
         .record_publish_attempt(PublishProtocol::Http);
+    let started = Instant::now();
     let result = publish_http_inner(&state, &headers, request).await;
+    state
+        .router
+        .metrics()
+        .record_latency(LatencyStage::Publish, started.elapsed());
     if result.is_ok() {
         state
             .router
@@ -321,6 +326,7 @@ enum WsCommand {
     },
 }
 
+#[allow(clippy::too_many_lines)]
 async fn websocket_session(
     socket: WebSocket,
     state: ApiState,
@@ -354,9 +360,24 @@ async fn websocket_session(
                     }))).await;
                     break;
                 };
+                let started = Instant::now();
+                let span = info_span!(
+                    "protocol.write",
+                    protocol = "websocket",
+                    message_id = %delivery.message.metadata.message_id,
+                );
+                delivery.message.set_span_parent(&span);
                 let payload = encode_delivery_json(&delivery);
                 let text = String::from_utf8_lossy(&payload).into_owned();
-                if sender.send(Message::Text(text.into())).await.is_err() {
+                let result = sender
+                    .send(Message::Text(text.into()))
+                    .instrument(span)
+                    .await;
+                state
+                    .router
+                    .metrics()
+                    .record_latency(LatencyStage::ProtocolWrite, started.elapsed());
+                if result.is_err() {
                     break;
                 }
             }
@@ -669,6 +690,7 @@ async fn sse(
         return Err(ApiError::BadRequest(error.to_string()));
     }
 
+    let metrics = Arc::clone(state.router.metrics());
     let router = Arc::clone(&state.router);
     let connection_id = registration.connection_id;
     let mut receiver = registration.receiver;
@@ -676,6 +698,14 @@ async fn sse(
     let output = stream! {
         let _guard = guard;
         while let Some(delivery) = receiver.recv().await {
+            let started = Instant::now();
+            let span = info_span!(
+                "protocol.write",
+                protocol = "sse",
+                message_id = %delivery.message.metadata.message_id,
+            );
+            delivery.message.set_span_parent(&span);
+            let entered = span.enter();
             let message_id = delivery.message.metadata.message_id.to_string();
             let event_name = match (
                 delivery.message.metadata.kind.as_deref(),
@@ -686,6 +716,8 @@ async fn sse(
                 _ => "message".to_owned(),
             };
             let data = String::from_utf8_lossy(&encode_delivery_json(&delivery)).into_owned();
+            metrics.record_latency(LatencyStage::ProtocolWrite, started.elapsed());
+            drop(entered);
             yield Ok::<Event, Infallible>(Event::default().id(message_id).event(event_name).data(data));
         }
     };

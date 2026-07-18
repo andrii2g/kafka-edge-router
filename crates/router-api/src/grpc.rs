@@ -1,13 +1,17 @@
 //! Tonic gRPC server-streaming and bidirectional-streaming adapter.
 
-use std::{pin::Pin, sync::Arc, time::Duration};
+use std::{
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_stream::try_stream;
 use bytes::Bytes;
 use futures_util::Stream;
 use router_core::{
-    ConnectionId, Delivery, DeliveryProtocol, PublishCommand, PublishErrorKind, PublishProtocol,
-    RouteFilter, Router, SubscriptionId,
+    ConnectionId, Delivery, DeliveryProtocol, LatencyStage, PublishCommand, PublishErrorKind,
+    PublishProtocol, RouteFilter, Router, SubscriptionId,
 };
 use router_proto::v1::{
     client_command,
@@ -20,7 +24,7 @@ use router_proto::v1::{
 use tokio::{net::TcpListener, sync::watch, task::JoinHandle};
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::{transport::Server, Request, Response, Status, Streaming};
-use tracing::warn;
+use tracing::{info_span, warn};
 
 use crate::{state::ConnectionGuard, ApiError, ApiState, Principal};
 
@@ -237,11 +241,23 @@ impl KafkaRouter for GrpcService {
         let router = Arc::clone(&self.state.router);
         let connection_id = registration.connection_id;
         let mut receiver = registration.receiver;
+        let metrics = Arc::clone(router.metrics());
         let guard = ConnectionGuard::new(router, connection_id);
         let output = try_stream! {
             let _guard = guard;
             while let Some(delivery) = receiver.recv().await {
-                yield proto_delivery(&delivery);
+                let started = Instant::now();
+                let span = info_span!(
+                    "protocol.write",
+                    protocol = "grpc",
+                    message_id = %delivery.message.metadata.message_id,
+                );
+                delivery.message.set_span_parent(&span);
+                let entered = span.enter();
+                let event = proto_delivery(&delivery);
+                metrics.record_latency(LatencyStage::ProtocolWrite, started.elapsed());
+                drop(entered);
+                yield event;
             }
         };
         Ok(Response::new(Box::pin(output)))
@@ -266,6 +282,7 @@ impl KafkaRouter for GrpcService {
         let connection_id = registration.connection_id;
         let mut receiver = registration.receiver;
         let guard = ConnectionGuard::new(Arc::clone(&router), connection_id);
+        let metrics = Arc::clone(router.metrics());
 
         let output = try_stream! {
             let _guard = guard;
@@ -286,7 +303,20 @@ impl KafkaRouter for GrpcService {
                     break;
                 };
                 match next? {
-                    ConnectInput::Delivery(delivery) => yield proto_delivery(&delivery),
+                    ConnectInput::Delivery(delivery) => {
+                        let started = Instant::now();
+                        let span = info_span!(
+                            "protocol.write",
+                            protocol = "grpc",
+                            message_id = %delivery.message.metadata.message_id,
+                        );
+                        delivery.message.set_span_parent(&span);
+                        let entered = span.enter();
+                        let event = proto_delivery(&delivery);
+                        metrics.record_latency(LatencyStage::ProtocolWrite, started.elapsed());
+                        drop(entered);
+                        yield event;
+                    }
                     ConnectInput::Command(command) => match command.command {
                         Some(client_command::Command::Subscribe(command)) => {
                             let ack =
@@ -331,7 +361,12 @@ impl KafkaRouter for GrpcService {
             .router
             .metrics()
             .record_publish_attempt(PublishProtocol::Grpc);
+        let started = Instant::now();
         let result = self.publish_inner(request).await;
+        self.state
+            .router
+            .metrics()
+            .record_latency(LatencyStage::Publish, started.elapsed());
         if result.is_ok() {
             self.state
                 .router

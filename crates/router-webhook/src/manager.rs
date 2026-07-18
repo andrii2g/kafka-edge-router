@@ -1,19 +1,24 @@
 //! One ordered worker and bounded queue per static webhook destination.
 
-use std::{net::IpAddr, sync::Arc, time::Duration};
+use std::{
+    net::IpAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use bytes::Bytes;
 use hmac::{Hmac, KeyInit, Mac};
 use http::{HeaderName, HeaderValue, StatusCode};
 use reqwest::{redirect::Policy, Client, Url};
 use router_core::{
-    encode_delivery_json, ConnectionId, Delivery, DeliveryProtocol, Router, SubscriptionId,
+    encode_delivery_json, ConnectionId, Delivery, DeliveryProtocol, LatencyStage, Router,
+    SubscriptionId,
 };
 use router_kafka::PreCommitSink;
 use sha2::Sha256;
 use thiserror::Error;
 use tokio::{sync::watch, task::JoinSet, time::sleep};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, info_span, warn, Instrument as _};
 
 use crate::{
     durable::{build_durable_runtime, DurableWebhookSink, DurableWorker},
@@ -277,7 +282,21 @@ impl WebhookWorker {
 
         for attempt in 1..=self.max_attempts {
             self.router.metrics().record_webhook_attempt();
-            match self.send_attempt(&body, &message_id, attempt).await {
+            let started = Instant::now();
+            let span = info_span!(
+                "webhook.attempt",
+                message_id = %message_id,
+                attempt,
+            );
+            delivery.message.set_span_parent(&span);
+            let outcome = self
+                .send_attempt(&body, &message_id, attempt)
+                .instrument(span)
+                .await;
+            self.router
+                .metrics()
+                .record_latency(LatencyStage::WebhookAttempt, started.elapsed());
+            match outcome {
                 AttemptResult::Delivered(status) => {
                     self.router.metrics().record_webhook_success();
                     debug!(

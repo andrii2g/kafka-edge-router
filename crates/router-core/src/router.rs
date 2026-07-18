@@ -3,6 +3,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use dashmap::DashMap;
@@ -11,8 +12,8 @@ use smallvec::SmallVec;
 use tokio::sync::mpsc;
 
 use crate::{
-    ConnectionId, CoreError, DeliveryProtocol, Metrics, RouteFilter, RouteKey, RoutedMessage,
-    SubscriptionId,
+    ConnectionId, CoreError, DeliveryProtocol, LatencyStage, Metrics, RouteFilter, RouteKey,
+    RoutedMessage, SubscriptionId,
 };
 
 fn default_queue_capacity() -> usize {
@@ -182,7 +183,7 @@ impl Router {
             .mutation_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        {
+        let protocol = {
             let mut connection = self
                 .connections
                 .get_mut(&connection_id)
@@ -200,7 +201,8 @@ impl Router {
                 .subscriptions
                 .insert(subscription_id.clone(), filter);
             debug_assert!(previous.is_none(), "duplicate subscription was pre-checked");
-        }
+            connection.protocol
+        };
 
         self.routes
             .entry(route_key)
@@ -208,6 +210,7 @@ impl Router {
             .entry(connection_id)
             .or_default()
             .push(subscription_id);
+        self.metrics.record_subscription_added(protocol);
         Ok(())
     }
 
@@ -221,17 +224,19 @@ impl Router {
             .mutation_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let filter = {
+        let (filter, protocol) = {
             let mut connection = self
                 .connections
                 .get_mut(&connection_id)
                 .ok_or(CoreError::ConnectionNotFound)?;
-            connection
+            let filter = connection
                 .subscriptions
                 .remove(subscription_id)
-                .ok_or(CoreError::SubscriptionNotFound)?
+                .ok_or(CoreError::SubscriptionNotFound)?;
+            (filter, connection.protocol)
         };
         self.remove_from_route(connection_id, subscription_id, &filter);
+        self.metrics.record_subscription_removed(protocol);
         Ok(())
     }
 
@@ -244,14 +249,18 @@ impl Router {
         let Some((_, connection)) = self.connections.remove(&connection_id) else {
             return;
         };
+        let protocol = connection.protocol;
+        let subscriptions = connection.subscriptions.len();
         for (subscription_id, filter) in connection.subscriptions {
             self.remove_from_route(connection_id, &subscription_id, &filter);
         }
+        self.metrics.record_protocol_closed(protocol, subscriptions);
     }
 
     /// Performs indexed matching and bounded non-blocking queue fan-out.
     pub fn dispatch(&self, message: Arc<RoutedMessage>) -> DispatchReport {
         self.metrics.record_valid_message();
+        let match_started = Instant::now();
         let mut matches: HashMap<ConnectionId, SmallVec<[SubscriptionId; 4]>> = HashMap::new();
         for candidate in RouteKey::candidates(&message.metadata) {
             if let Some(bucket) = self.routes.get(&candidate) {
@@ -267,6 +276,9 @@ impl Router {
         }
 
         let matched_subscriptions = matches.values().map(SmallVec::len).sum();
+        self.metrics
+            .record_latency(LatencyStage::Match, match_started.elapsed());
+        let enqueue_started = Instant::now();
         let mut report = DispatchReport {
             matched_subscriptions,
             ..DispatchReport::default()
@@ -319,6 +331,8 @@ impl Router {
             self.unregister_connection(connection_id);
         }
 
+        self.metrics
+            .record_latency(LatencyStage::Enqueue, enqueue_started.elapsed());
         self.metrics.record_dispatch(
             report.matched_subscriptions,
             report.delivered_connections,

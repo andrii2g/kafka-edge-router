@@ -1,0 +1,43 @@
+groups:
+  - name: kafka-edge-router
+    rules:
+      - alert: KafkaRouterLagHigh
+        expr: router_kafka_lag_messages > 10000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Kafka edge router lag is high
+          runbook_url: docs/OBSERVABILITY.md#dashboard-and-response
+      - alert: KafkaRouterCommitErrors
+        expr: increase(router_kafka_commit_errors_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Kafka source offset commits are failing
+          runbook_url: docs/OBSERVABILITY.md#dashboard-and-response
+      - alert: KafkaRouterQueuePressure
+        expr: rate(router_full_connections_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Delivery queues are persistently full
+          runbook_url: docs/OBSERVABILITY.md#dashboard-and-response
+      - alert: KafkaRouterWebhookFailures
+        expr: increase(router_webhook_failures_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Webhook deliveries are reaching terminal failure
+          runbook_url: docs/OBSERVABILITY.md#dashboard-and-response
+      - alert: KafkaRouterNoAssignment
+        expr: router_kafka_assigned_partitions == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Kafka edge router has no assigned source partitions
+          runbook_url: docs/OBSERVABILITY.md#dashboard-and-response

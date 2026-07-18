@@ -10,8 +10,9 @@
 - `grpc.health.v1.Health`: standard gRPC readiness for `router.v1.KafkaRouter` when
   `api.grpc_health_enabled` is true.
 
-Current readiness does not actively query Kafka on every request. Alert on consumer
-errors and lag separately. Task 008 adds a configurable Kafka-health readiness policy.
+When `observability.kafka_readiness.enabled` is true, readiness follows recent Kafka health
+through configured consecutive success and failure thresholds. Metrics and alerts remain
+necessary because readiness is intentionally a coarse traffic gate.
 
 ## Startup checklist
 
@@ -66,8 +67,10 @@ router_webhook_successes_total
 router_webhook_failures_total
 ```
 
-Task 008 adds histograms for decode, match, enqueue, wire write, and end-to-end timestamp
-latency, plus consumer lag.
+Latency histograms cover decode, match, enqueue, protocol write, webhook attempt, publish,
+and end-to-end processing. Gauges expose aggregate Kafka lag, assigned partitions, and active
+connections/subscriptions by bounded protocol label. See `docs/OBSERVABILITY.md` for the
+complete label policy, dashboard mapping, and response actions.
 
 ## Suggested alerts
 

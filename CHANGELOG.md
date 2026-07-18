@@ -6,6 +6,13 @@ All notable changes will be documented here. The project follows Semantic Versio
 
 ## Unreleased
 
+- Added fixed-bucket latency histograms for decode, match, enqueue, protocol write, webhook
+  attempts, publish, and end-to-end handling.
+- Added bounded protocol gauges, Kafka lag/assignment metrics, W3C trace propagation, optional
+  nonfatal OTLP/HTTP export with graceful flush, and hysteretic Kafka readiness.
+- Added a Grafana dashboard, Prometheus alert examples, sensitive/high-cardinality attribute
+  policy, and an operator response map.
+
 - Added explicit volatile and Kafka-backed durable webhook delivery modes.
 - Durable webhook commands are acknowledged before source offset commit and retain the
   original message id across restart-safe retries.
@@ -40,6 +47,10 @@ All notable changes will be documented here. The project follows Semantic Versio
   tenant-prefixed Kafka keys, classified timeout/queue-full errors, and publish counters.
 
 ### Validation
+
+- Task 008 observability benchmark ran in WSL Docker on Rust 1.88.0, Linux x86_64, hosted on
+  an AMD Ryzen 7 8845HS. Estimates: baseline 870.88 ps, atomic counter 3.3594 ns, and
+  fixed-bucket histogram 5.3202 ns per observation.
 
 - Re-audited tasks 000-004 against their acceptance criteria with Docker available.
 - Built `kafka-edge-router:audit-000-004` from the locked workspace as
