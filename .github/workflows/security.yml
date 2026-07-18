@@ -38,7 +38,7 @@ jobs:
       - name: Build release image
         run: docker build --tag kafka-edge-router:scan .
       - name: Scan release image
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: kafka-edge-router:scan
           format: table
