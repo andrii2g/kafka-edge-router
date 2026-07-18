@@ -80,8 +80,13 @@ impl AppConfig {
             .grpc_addr
             .parse::<SocketAddr>()
             .context("server.grpc_addr is not a socket address")?;
-        if self.api.http_body_limit_bytes == 0 || self.api.sse_keep_alive_secs == 0 {
-            bail!("HTTP body limit and SSE keep-alive interval must be positive");
+        if self.api.http_body_limit_bytes == 0
+            || self.api.sse_keep_alive_secs == 0
+            || self.api.ws_max_message_bytes == 0
+            || self.api.ws_max_frame_bytes == 0
+            || self.api.ws_max_commands_per_second == 0
+        {
+            bail!("HTTP, SSE, and WebSocket limits must be positive");
         }
         if self.router.default_queue_capacity == 0
             || self.router.max_queue_capacity == 0
@@ -93,6 +98,9 @@ impl AppConfig {
             bail!(
                 "queue capacities, subscription limits, and slow-consumer strikes must be positive"
             );
+        }
+        if self.api.ws_max_frame_bytes > self.api.ws_max_message_bytes {
+            bail!("api.ws_max_frame_bytes must not exceed api.ws_max_message_bytes");
         }
         if self.router.default_queue_capacity > self.router.max_queue_capacity {
             bail!("router.default_queue_capacity must not exceed router.max_queue_capacity");
@@ -294,6 +302,22 @@ mod tests {
         assert!(over.validate_listener_and_limits().is_err());
     }
 
+    #[test]
+    fn websocket_limits_must_be_positive_and_frame_bounded() {
+        let mut valid = AppConfig::default();
+        valid.api.ws_max_message_bytes = 128;
+        valid.api.ws_max_frame_bytes = 64;
+        valid.api.ws_max_commands_per_second = 1;
+        assert!(valid.validate_listener_and_limits().is_ok());
+
+        let mut zero = valid.clone();
+        zero.api.ws_max_commands_per_second = 0;
+        assert!(zero.validate_listener_and_limits().is_err());
+
+        let mut oversized_frame = valid;
+        oversized_frame.api.ws_max_frame_bytes = 129;
+        assert!(oversized_frame.validate_listener_and_limits().is_err());
+    }
     #[test]
     fn static_webhook_queue_capacity_respects_core_cap() {
         for (capacity, expected_valid) in [(0, false), (8, true), (9, false)] {

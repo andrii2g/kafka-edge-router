@@ -26,6 +26,18 @@ fn default_sse_keep_alive_secs() -> u64 {
     15
 }
 
+fn default_ws_max_message_bytes() -> usize {
+    65_536
+}
+
+fn default_ws_max_frame_bytes() -> usize {
+    65_536
+}
+
+fn default_ws_max_commands_per_second() -> u32 {
+    32
+}
+
 /// API limits shared by protocol adapters.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
@@ -38,6 +50,12 @@ pub struct ApiConfig {
     pub max_stream_queue_capacity: usize,
     /// SSE keep-alive interval.
     pub sse_keep_alive_secs: u64,
+    /// Maximum assembled inbound WebSocket message size.
+    pub ws_max_message_bytes: usize,
+    /// Maximum inbound WebSocket frame size.
+    pub ws_max_frame_bytes: usize,
+    /// Maximum application commands accepted per WebSocket connection per second.
+    pub ws_max_commands_per_second: u32,
 }
 
 impl Default for ApiConfig {
@@ -47,6 +65,9 @@ impl Default for ApiConfig {
             stream_queue_capacity: default_stream_queue_capacity(),
             max_stream_queue_capacity: default_max_stream_queue_capacity(),
             sse_keep_alive_secs: default_sse_keep_alive_secs(),
+            ws_max_message_bytes: default_ws_max_message_bytes(),
+            ws_max_frame_bytes: default_ws_max_frame_bytes(),
+            ws_max_commands_per_second: default_ws_max_commands_per_second(),
         }
     }
 }

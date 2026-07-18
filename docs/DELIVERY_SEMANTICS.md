@@ -62,7 +62,9 @@ rule and need configuration tests.
 WebSocket, SSE, and gRPC queues are in memory. A queue-full result drops that delivery for
 that connection. After the configured number of full outcomes, the connection is
 unregistered and its protocol task eventually observes a closed receiver or failed
-socket.
+socket. WebSocket clients receive close code 1013 with reason slow_consumer when
+the core evicts their saturated queue; the close frame is diagnostic, not a delivery
+acknowledgement.
 
 No live protocol currently persists:
 

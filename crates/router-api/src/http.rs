@@ -1,11 +1,15 @@
 //! Axum HTTP, WebSocket, and Server-Sent Events endpoints.
 
-use std::{convert::Infallible, sync::Arc, time::Duration};
+use std::{
+    convert::Infallible,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_stream::stream;
 use axum::{
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
+        ws::{close_code, CloseFrame, Message, WebSocket, WebSocketUpgrade},
         Query, State,
     },
     response::{
@@ -19,8 +23,8 @@ use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use http::{header, HeaderMap, StatusCode};
 use router_core::{
-    encode_delivery_json, render_prometheus, ConnectionId, DeliveryProtocol, PublishCommand,
-    PublishErrorKind, RouteFilter, SubscriptionId,
+    encode_delivery_json, render_prometheus, ConnectionId, CoreError, DeliveryProtocol,
+    PublishCommand, PublishErrorKind, RouteFilter, SubscriptionId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -201,8 +205,13 @@ async fn websocket(
     let principal = state
         .authenticator
         .authenticate_http(&headers, query.tenant_id.as_deref())?;
+    authorize_requested_tenant(&principal, query.tenant_id.as_deref())?;
     let queue_capacity = stream_queue_capacity(&state, query.queue_capacity)?;
+    let max_message_bytes = state.config.ws_max_message_bytes;
+    let max_frame_bytes = state.config.ws_max_frame_bytes;
     Ok(websocket
+        .max_message_size(max_message_bytes)
+        .max_frame_size(max_frame_bytes)
         .on_upgrade(move |socket| websocket_session(socket, state, principal, queue_capacity)))
 }
 
@@ -243,11 +252,16 @@ async fn websocket_session(
     let _guard = ConnectionGuard::new(Arc::clone(&state.router), connection_id);
     let mut receiver = registration.receiver;
     let (mut sender, mut incoming) = socket.split();
+    let mut rate_limiter = CommandRateLimiter::new(state.config.ws_max_commands_per_second);
 
     loop {
         tokio::select! {
             delivery = receiver.recv() => {
                 let Some(delivery) = delivery else {
+                    let _ = sender.send(Message::Close(Some(CloseFrame {
+                        code: close_code::AGAIN,
+                        reason: "slow_consumer".into(),
+                    }))).await;
                     break;
                 };
                 let payload = encode_delivery_json(&delivery);
@@ -262,12 +276,26 @@ async fn websocket_session(
                 };
                 match message {
                     Ok(Message::Text(text)) => {
-                        let response = handle_ws_command(
-                            &state,
-                            &principal,
-                            connection_id,
-                            text.as_str(),
-                        );
+                        let response = if rate_limiter.allow() {
+                            handle_ws_command(
+                                &state,
+                                &principal,
+                                connection_id,
+                                text.as_str(),
+                            )
+                        } else {
+                            ws_error("rate_limited", "command rate limit exceeded")
+                        };
+                        if sender.send(Message::Text(response.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(Message::Binary(_)) => {
+                        let response = if rate_limiter.allow() {
+                            ws_error("binary_not_supported", "binary commands are not supported")
+                        } else {
+                            ws_error("rate_limited", "command rate limit exceeded")
+                        };
                         if sender.send(Message::Text(response.into())).await.is_err() {
                             break;
                         }
@@ -277,8 +305,18 @@ async fn websocket_session(
                             break;
                         }
                     }
-                    Ok(Message::Close(_)) | Err(_) => break,
-                    Ok(Message::Binary(_) | Message::Pong(_)) => {}
+                    Ok(Message::Close(frame)) => {
+                        let _ = sender.send(Message::Close(frame)).await;
+                        break;
+                    }
+                    Err(error) => {
+                        let detail = error.to_string();
+                        let frame = ws_transport_close(error);
+                        debug!(error = %detail, %connection_id, "WebSocket transport error");
+                        let _ = sender.send(Message::Close(Some(frame))).await;
+                        break;
+                    }
+                    Ok(Message::Pong(_)) => {}
                 }
             }
         }
@@ -286,6 +324,53 @@ async fn websocket_session(
     debug!(%connection_id, "WebSocket disconnected");
 }
 
+fn ws_transport_close(error: axum::Error) -> CloseFrame {
+    let inner = error.into_inner();
+    let oversized = matches!(
+        inner.downcast_ref::<tokio_tungstenite::tungstenite::Error>(),
+        Some(tokio_tungstenite::tungstenite::Error::Capacity(
+            tokio_tungstenite::tungstenite::error::CapacityError::MessageTooLong { .. }
+        ))
+    );
+    if oversized {
+        CloseFrame {
+            code: close_code::SIZE,
+            reason: "message_too_large".into(),
+        }
+    } else {
+        CloseFrame {
+            code: close_code::PROTOCOL,
+            reason: "protocol_error".into(),
+        }
+    }
+}
+struct CommandRateLimiter {
+    window_started: Instant,
+    accepted: u32,
+    limit: u32,
+}
+
+impl CommandRateLimiter {
+    fn new(limit: u32) -> Self {
+        Self {
+            window_started: Instant::now(),
+            accepted: 0,
+            limit,
+        }
+    }
+
+    fn allow(&mut self) -> bool {
+        if self.window_started.elapsed() >= Duration::from_secs(1) {
+            self.window_started = Instant::now();
+            self.accepted = 0;
+        }
+        if self.accepted >= self.limit {
+            return false;
+        }
+        self.accepted += 1;
+        true
+    }
+}
 fn handle_ws_command(
     state: &ApiState,
     principal: &Principal,
@@ -294,20 +379,25 @@ fn handle_ws_command(
 ) -> String {
     let command: WsCommand = match serde_json::from_str(text) {
         Ok(command) => command,
-        Err(error) => return ws_error("invalid_json", &error.to_string()),
+        Err(error) if error.is_syntax() || error.is_eof() => {
+            return ws_error("invalid_json", "command is not valid JSON");
+        }
+        Err(_) => return ws_error("invalid_command", "command does not match the protocol"),
     };
     match command {
         WsCommand::Subscribe {
             subscription_id,
             filter,
         } => {
-            let subscription_id = match SubscriptionId::new(subscription_id) {
-                Ok(value) => value,
-                Err(error) => return ws_error("invalid_subscription", &error.to_string()),
+            let Ok(subscription_id) = SubscriptionId::new(subscription_id) else {
+                return ws_error("invalid_subscription_id", "subscription_id is invalid");
             };
             let filter = match filter.into_filter(principal) {
                 Ok(filter) => filter,
-                Err(error) => return ws_error("invalid_filter", &error.to_string()),
+                Err(ApiError::Forbidden) => {
+                    return ws_error("tenant_mismatch", "filter tenant is not authorized");
+                }
+                Err(_) => return ws_error("invalid_filter", "filter is invalid"),
             };
             match state
                 .router
@@ -318,13 +408,12 @@ fn handle_ws_command(
                     "subscription_id": subscription_id.as_str()
                 })
                 .to_string(),
-                Err(error) => ws_error("subscribe_failed", &error.to_string()),
+                Err(error) => ws_subscribe_error(&error),
             }
         }
         WsCommand::Unsubscribe { subscription_id } => {
-            let subscription_id = match SubscriptionId::new(subscription_id) {
-                Ok(value) => value,
-                Err(error) => return ws_error("invalid_subscription", &error.to_string()),
+            let Ok(subscription_id) = SubscriptionId::new(subscription_id) else {
+                return ws_error("invalid_subscription_id", "subscription_id is invalid");
             };
             match state.router.unsubscribe(connection_id, &subscription_id) {
                 Ok(()) => json!({
@@ -332,7 +421,13 @@ fn handle_ws_command(
                     "subscription_id": subscription_id.as_str()
                 })
                 .to_string(),
-                Err(error) => ws_error("unsubscribe_failed", &error.to_string()),
+                Err(CoreError::SubscriptionNotFound) => {
+                    ws_error("subscription_not_found", "subscription does not exist")
+                }
+                Err(CoreError::ConnectionNotFound) => {
+                    ws_error("connection_closed", "connection is no longer registered")
+                }
+                Err(_) => ws_error("unsubscribe_failed", "subscription could not be removed"),
             }
         }
         WsCommand::Ping { opaque } => json!({
@@ -343,7 +438,29 @@ fn handle_ws_command(
     }
 }
 
-fn ws_error(code: &str, message: &str) -> String {
+fn ws_subscribe_error(error: &CoreError) -> String {
+    match error {
+        CoreError::SubscriptionExists => {
+            ws_error("subscription_exists", "subscription_id already exists")
+        }
+        CoreError::SubscriptionLimitReached => ws_error(
+            "subscription_limit_reached",
+            "connection subscription limit reached",
+        ),
+        CoreError::TenantMismatch => ws_error("tenant_mismatch", "filter tenant is not authorized"),
+        CoreError::ConnectionNotFound => {
+            ws_error("connection_closed", "connection is no longer registered")
+        }
+        CoreError::InvalidIdentifier { .. }
+        | CoreError::IncompleteAudience
+        | CoreError::MissingField(_) => ws_error("invalid_filter", "filter is invalid"),
+        CoreError::SubscriptionNotFound | CoreError::InvalidQueueCapacity { .. } => {
+            ws_error("subscribe_failed", "subscription could not be created")
+        }
+    }
+}
+
+fn ws_error(code: &'static str, message: &'static str) -> String {
     json!({
         "operation": "error",
         "code": code,
@@ -351,7 +468,6 @@ fn ws_error(code: &str, message: &str) -> String {
     })
     .to_string()
 }
-
 #[derive(Clone, Debug, Default, Deserialize)]
 struct FilterInput {
     #[serde(default)]

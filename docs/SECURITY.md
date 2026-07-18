@@ -59,8 +59,9 @@ Current controls include:
 
 Publicly requested queue capacities are capped by `api.max_stream_queue_capacity`, and
 core rejects every queue above `router.max_queue_capacity`, including static webhooks.
-Tasks 003/004/005 add connection-level command rate limits, maximum WebSocket frame
-limits, and gRPC message-size limits.
+WebSocket frame/message sizes and per-connection command rates are bounded. Per-message
+compression remains disabled to avoid unmeasured CPU and retained-memory amplification.
+Tasks 004/005 add remaining SSE and gRPC protocol-specific controls.
 
 ## TLS
 

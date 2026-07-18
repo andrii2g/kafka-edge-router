@@ -89,8 +89,44 @@ Delivery:
 }
 ```
 
-A malformed command produces an application error frame; transport errors close the
-connection. WebSocket protocol ping/pong frames are also supported by Axum.
+Application command failures produce a stable error envelope and do not close an otherwise
+healthy connection:
+
+```json
+{
+  "operation": "error",
+  "code": "subscription_exists",
+  "message": "subscription_id already exists"
+}
+```
+
+| Code | Meaning |
+|---|---|
+| `invalid_json` | Text is not valid JSON |
+| `invalid_command` | JSON does not match a supported command |
+| `binary_not_supported` | Binary application commands are unsupported |
+| `invalid_subscription_id` | Subscription id violates identifier rules |
+| `invalid_filter` | Filter fields violate routing rules |
+| `tenant_mismatch` | Requested filter tenant differs from the authenticated tenant |
+| `subscription_exists` | Subscription id is already registered on this connection |
+| `subscription_limit_reached` | Connection reached the configured subscription cap |
+| `subscription_not_found` | Unsubscribe references an unknown id |
+| `rate_limited` | Per-connection command budget is exhausted |
+| `connection_closed` | Core registration no longer exists |
+| `subscribe_failed` | Subscription could not be created for another stable reason |
+| `unsubscribe_failed` | Subscription could not be removed for another stable reason |
+
+Inbound frame and assembled-message sizes are capped by `api.ws_max_frame_bytes` and
+`api.ws_max_message_bytes`. Oversized input closes with code `1009` and reason
+`message_too_large`; other WebSocket protocol errors close with `1002` and reason
+`protocol_error`. Core slow-consumer eviction closes with `1013` and reason
+`slow_consumer`. Authentication or query-tenant failures reject the HTTP upgrade with
+`401` or `403`, so no WebSocket registration is created.
+
+Application text and binary commands share a fixed one-second per-connection budget set
+by `api.ws_max_commands_per_second`. WebSocket protocol ping/pong frames are handled
+separately. Per-message compression is intentionally disabled: no CPU and retained-memory
+benchmark currently justifies enabling it.
 
 ## Server-Sent Events
 

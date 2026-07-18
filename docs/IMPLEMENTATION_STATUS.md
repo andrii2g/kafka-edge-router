@@ -11,12 +11,12 @@ injection tasks are complete. The evidence column names those remaining proof ga
 | Cargo workspace and crate boundaries | implemented | root `Cargo.toml`; `router-core` remains transport-independent and Kafka/API/webhook dependencies stay in their owning crates |
 | Header-only Kafka decoding | implemented | `router-kafka/decoder.rs` reads routing metadata from headers and copies payload bytes without parsing them; unit tests cover missing/duplicate/invalid headers, pairing, limits, and defaults |
 | Exact/wildcard indexed matching | implemented | `router-core/route.rs`; exhaustive 64-shape candidate uniqueness and indexed/reference equivalence tests |
-| Tenant-isolated subscriptions | implemented | core rejects tenant mismatches; HTTP/gRPC adapters authorize then rewrite filters to the authenticated principal; adapter security suites remain tasks 003-006 and 009 |
+| Tenant-isolated subscriptions | implemented | core rejects tenant mismatches; HTTP/gRPC adapters authorize then rewrite filters to the authenticated principal; adapter security suites remain tasks 004-006 and 009 |
 | Bounded per-connection queues | implemented | Tokio bounded MPSC registration in `router-core/router.rs`; zero/exact/over-limit tests cover core, live API, and webhook configuration |
 | Slow-consumer eviction | implemented | non-blocking `try_send`, saturating strike count, zero/one/configured-strike tests, and route cleanup assertions in core |
 | Kafka explicit commit loop | implemented | `router-kafka/ingestor.rs` disables auto commit/store and requests async commit after dispatch policy; broker tests cover commits, restart redelivery, poison policy, and rebalances |
 | Kafka producer with idempotence enforced | implemented | `router-kafka/publisher.rs` reapplies `enable.idempotence=true` and `acks=all` after free-form properties; broker key/ordering tests are complete; publish authorization/idempotency remains task 006 |
-| WebSocket dynamic subscriptions | implemented | `router-api/http.rs` wires authenticated connect, subscribe, unsubscribe, ping, bounded delivery, and RAII cleanup; limits/compatibility tests remain task 003 |
+| WebSocket dynamic subscriptions | implemented | authenticated upgrade, stable command/error contract, queue/frame/message/rate limits, intentional close codes, RAII cleanup, cancellation, reconnect, and tenant-negative adapter tests |
 | SSE fixed subscriptions | implemented | `router-api/http.rs` wires authenticated fixed filters, bounded delivery, event ids, keep-alives, and RAII cleanup; reconnect/framing tests remain task 004 |
 | gRPC fixed and bidirectional streams | implemented | `router-api/grpc.rs` and `router-proto` wire fixed subscribe, bidi commands, raw-byte delivery, and RAII cleanup; interceptor/contract tests remain task 005 |
 | HTTP/gRPC publish | implemented | both adapters authorize tenant, call `MessagePublisher`, and return Kafka coordinates; authorization and idempotency suites remain task 006 |
@@ -30,7 +30,7 @@ injection tasks are complete. The evidence column names those remaining proof ga
 | Serialized route-index mutation and safe empty-bucket cleanup | implemented | one mutation mutex covers connection/index mutation and conditional cleanup; churn/repopulation races assert zero leaked route keys |
 | Route-index concurrency/property proof | implemented | exhaustive/randomized matcher properties, barrier races for subscribe/unregister and unsubscribe/dispatch, atomic duplicate tests, repeated guard cleanup, and the `matcher` benchmark |
 | Kafka rebalance/commit integration suite | implemented | isolated official-image harness covers header/default contracts, keyed ordering, valid/invalid commits, restart duplicates, and forced rebalances; CI runs it separately |
-| WS limits and rate controls | planned | task 003 |
+| WS limits and rate controls | implemented | bounded upgrade configuration, per-connection fixed-window limiter, subscription-cap errors, oversized-input `1009`, and slow-consumer `1013` coverage |
 | SSE reconnect policy tests | planned | task 004 |
 | gRPC limits/interceptors | planned | task 005 |
 | Publish authorization/idempotency suite | planned | task 006 |

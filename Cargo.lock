@@ -1988,6 +1988,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite",
  "tonic",
  "tower-http 0.7.0",
  "tracing",

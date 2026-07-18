@@ -4,6 +4,18 @@ All notable changes will be documented here. The project follows Semantic Versio
 
 
 
+## Unreleased
+
+### Added
+
+- Added WebSocket adapter coverage for commands, tenant isolation, queue and subscription
+  limits, rate limiting, oversized input, slow-consumer eviction, cancellation, and reconnect.
+
+### Changed
+
+- Added bounded WebSocket frame/message configuration, per-connection command budgets,
+  stable application error codes, and explicit `1009`/`1013` close reasons.
+- Kept WebSocket per-message compression disabled pending CPU and retained-memory benchmarks.
 ## 18.07.2026
 
 ### Added
