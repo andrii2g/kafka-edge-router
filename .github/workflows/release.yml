@@ -20,8 +20,8 @@ jobs:
             target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.100.0
         with:
           targets: ${{ matrix.target }}
       - name: Install native build dependencies
@@ -34,7 +34,7 @@ jobs:
           mkdir -p dist
           cp target/${{ matrix.target }}/release/routerd dist/routerd-${{ matrix.target }}
           sha256sum dist/routerd-${{ matrix.target }} > dist/routerd-${{ matrix.target }}.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: routerd-${{ matrix.target }}
           path: dist/*
@@ -42,9 +42,9 @@ jobs:
   image:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
