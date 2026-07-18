@@ -371,12 +371,17 @@ impl Router {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{
+        sync::{Arc, Barrier},
+        thread,
+    };
 
     use bytes::Bytes;
 
     use super::{Router, RouterConfig};
-    use crate::{DeliveryProtocol, RouteFilter, RoutedMessage, RoutingMetadata, SubscriptionId};
+    use crate::{
+        CoreError, DeliveryProtocol, RouteFilter, RoutedMessage, RoutingMetadata, SubscriptionId,
+    };
 
     fn filter(tenant: &str, channel: Option<&str>) -> RouteFilter {
         RouteFilter {
@@ -412,19 +417,32 @@ mod tests {
         )
     }
 
+    fn test_config(slow_consumer_strikes: u32) -> RouterConfig {
+        RouterConfig {
+            default_queue_capacity: 1,
+            max_queue_capacity: 16,
+            max_subscriptions_per_connection: 10,
+            slow_consumer_strikes,
+        }
+    }
+
+    fn subscribe_all(router: &Router, connection_id: crate::ConnectionId, id: &str) {
+        router
+            .subscribe(
+                connection_id,
+                SubscriptionId::new(id).expect("id"),
+                filter("tenant-a", None),
+            )
+            .expect("subscribe");
+    }
+
     #[tokio::test]
     async fn deduplicates_multiple_matching_filters_per_connection() {
         let router = Router::new(RouterConfig::default());
         let mut registration = router
             .register_connection("tenant-a", DeliveryProtocol::WebSocket, None)
             .expect("registration");
-        router
-            .subscribe(
-                registration.connection_id,
-                SubscriptionId::new("all").expect("id"),
-                filter("tenant-a", None),
-            )
-            .expect("subscribe");
+        subscribe_all(&router, registration.connection_id, "all");
         router
             .subscribe(
                 registration.connection_id,
@@ -451,27 +469,38 @@ mod tests {
             SubscriptionId::new("bad").expect("id"),
             filter("tenant-b", None),
         );
-        assert!(matches!(result, Err(crate::CoreError::TenantMismatch)));
+        assert!(matches!(result, Err(CoreError::TenantMismatch)));
     }
 
     #[test]
-    fn bounded_queue_triggers_slow_consumer_policy() {
-        let router = Router::new(RouterConfig {
-            default_queue_capacity: 1,
-            max_queue_capacity: 16,
-            max_subscriptions_per_connection: 10,
-            slow_consumer_strikes: 2,
-        });
+    fn zero_and_one_strike_both_disconnect_on_first_full_queue() {
+        for strikes in [0, 1] {
+            let router = Router::new(test_config(strikes));
+            let registration = router
+                .register_connection("tenant-a", DeliveryProtocol::Sse, None)
+                .expect("registration");
+            subscribe_all(&router, registration.connection_id, "all");
+
+            assert_eq!(
+                router
+                    .dispatch(message("tenant-a", "news"))
+                    .delivered_connections,
+                1
+            );
+            let report = router.dispatch(message("tenant-a", "news"));
+            assert_eq!(report.full_connections, 1, "strike setting {strikes}");
+            assert_eq!(router.status().active_connections, 0);
+            assert!(router.routes.is_empty());
+        }
+    }
+
+    #[test]
+    fn bounded_queue_triggers_configured_slow_consumer_policy() {
+        let router = Router::new(test_config(2));
         let registration = router
             .register_connection("tenant-a", DeliveryProtocol::Sse, None)
             .expect("registration");
-        router
-            .subscribe(
-                registration.connection_id,
-                SubscriptionId::new("all").expect("id"),
-                filter("tenant-a", None),
-            )
-            .expect("subscribe");
+        subscribe_all(&router, registration.connection_id, "all");
         assert_eq!(
             router
                 .dispatch(message("tenant-a", "news"))
@@ -484,6 +513,7 @@ mod tests {
                 .full_connections,
             1
         );
+        assert_eq!(router.status().active_connections, 1);
         assert_eq!(
             router
                 .dispatch(message("tenant-a", "news"))
@@ -491,23 +521,285 @@ mod tests {
             1
         );
         assert_eq!(router.status().active_connections, 0);
+        assert!(router.routes.is_empty());
     }
 
     #[test]
-    fn rejects_queue_capacity_above_process_cap() {
+    fn queue_capacity_accepts_exact_limit_and_rejects_zero_and_over_limit() {
         let router = Router::new(RouterConfig {
             default_queue_capacity: 4,
             max_queue_capacity: 8,
             max_subscriptions_per_connection: 10,
             slow_consumer_strikes: 2,
         });
-        let result = router.register_connection("tenant-a", DeliveryProtocol::WebSocket, Some(9));
+
+        let zero = router.register_connection("tenant-a", DeliveryProtocol::WebSocket, Some(0));
         assert!(matches!(
-            result,
-            Err(crate::CoreError::InvalidQueueCapacity {
+            zero,
+            Err(CoreError::InvalidQueueCapacity {
+                requested: 0,
+                maximum: 8
+            })
+        ));
+        assert!(router
+            .register_connection("tenant-a", DeliveryProtocol::WebSocket, Some(8))
+            .is_ok());
+        let over = router.register_connection("tenant-a", DeliveryProtocol::WebSocket, Some(9));
+        assert!(matches!(
+            over,
+            Err(CoreError::InvalidQueueCapacity {
                 requested: 9,
                 maximum: 8
             })
         ));
+    }
+
+    #[test]
+    fn duplicate_subscription_insertion_is_atomic() {
+        let router = Arc::new(Router::new(RouterConfig::default()));
+        let registration = router
+            .register_connection("tenant-a", DeliveryProtocol::WebSocket, None)
+            .expect("registration");
+        let barrier = Arc::new(Barrier::new(3));
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let router = Arc::clone(&router);
+            let barrier = Arc::clone(&barrier);
+            let connection_id = registration.connection_id;
+            workers.push(thread::spawn(move || {
+                barrier.wait();
+                router.subscribe(
+                    connection_id,
+                    SubscriptionId::new("duplicate").expect("id"),
+                    filter("tenant-a", None),
+                )
+            }));
+        }
+        barrier.wait();
+        let results: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("worker"))
+            .collect();
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(CoreError::SubscriptionExists)))
+                .count(),
+            1
+        );
+        assert_eq!(router.status().subscriptions, 1);
+        assert_eq!(router.routes.len(), 1);
+        assert_eq!(
+            router
+                .dispatch(message("tenant-a", "news"))
+                .matched_subscriptions,
+            1
+        );
+    }
+
+    #[test]
+    fn subscribe_racing_unregister_leaves_no_index_entries() {
+        let router = Arc::new(Router::new(RouterConfig::default()));
+        let registration = router
+            .register_connection("tenant-a", DeliveryProtocol::WebSocket, None)
+            .expect("registration");
+        let barrier = Arc::new(Barrier::new(3));
+
+        let subscribe = {
+            let router = Arc::clone(&router);
+            let barrier = Arc::clone(&barrier);
+            let connection_id = registration.connection_id;
+            thread::spawn(move || {
+                barrier.wait();
+                router.subscribe(
+                    connection_id,
+                    SubscriptionId::new("racing").expect("id"),
+                    filter("tenant-a", None),
+                )
+            })
+        };
+        let unregister = {
+            let router = Arc::clone(&router);
+            let barrier = Arc::clone(&barrier);
+            let connection_id = registration.connection_id;
+            thread::spawn(move || {
+                barrier.wait();
+                router.unregister_connection(connection_id);
+            })
+        };
+
+        barrier.wait();
+        let subscribe_result = subscribe.join().expect("subscribe worker");
+        unregister.join().expect("unregister worker");
+        assert!(
+            subscribe_result.is_ok()
+                || matches!(subscribe_result, Err(CoreError::ConnectionNotFound))
+        );
+        assert_eq!(router.status().active_connections, 0);
+        assert_eq!(router.status().subscriptions, 0);
+        assert!(router.routes.is_empty());
+    }
+
+    #[test]
+    fn unsubscribe_racing_dispatch_has_bounded_in_flight_semantics() {
+        let router = Arc::new(Router::new(RouterConfig::default()));
+        let registration = router
+            .register_connection("tenant-a", DeliveryProtocol::WebSocket, None)
+            .expect("registration");
+        let subscription_id = SubscriptionId::new("racing").expect("id");
+        router
+            .subscribe(
+                registration.connection_id,
+                subscription_id.clone(),
+                filter("tenant-a", None),
+            )
+            .expect("subscribe");
+        let barrier = Arc::new(Barrier::new(3));
+
+        let unsubscribe = {
+            let router = Arc::clone(&router);
+            let barrier = Arc::clone(&barrier);
+            let subscription_id = subscription_id.clone();
+            let connection_id = registration.connection_id;
+            thread::spawn(move || {
+                barrier.wait();
+                router.unsubscribe(connection_id, &subscription_id)
+            })
+        };
+        let dispatch = {
+            let router = Arc::clone(&router);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                router.dispatch(message("tenant-a", "news"))
+            })
+        };
+
+        barrier.wait();
+        unsubscribe
+            .join()
+            .expect("unsubscribe worker")
+            .expect("unsubscribe");
+        let report = dispatch.join().expect("dispatch worker");
+        assert!(report.matched_subscriptions <= 1);
+        assert!(report.delivered_connections <= 1);
+        assert_eq!(router.status().subscriptions, 0);
+        assert!(router.routes.is_empty());
+        let after_unsubscribe = router.dispatch(message("tenant-a", "news"));
+        assert_eq!(after_unsubscribe.matched_subscriptions, 0);
+        assert_eq!(after_unsubscribe.delivered_connections, 0);
+    }
+
+    #[test]
+    fn concurrent_repeated_unregister_is_idempotent() {
+        let router = Arc::new(Router::new(RouterConfig::default()));
+        let registration = router
+            .register_connection("tenant-a", DeliveryProtocol::Grpc, None)
+            .expect("registration");
+        subscribe_all(&router, registration.connection_id, "all");
+        let barrier = Arc::new(Barrier::new(9));
+        let mut workers = Vec::new();
+        for _ in 0..8 {
+            let router = Arc::clone(&router);
+            let barrier = Arc::clone(&barrier);
+            let connection_id = registration.connection_id;
+            workers.push(thread::spawn(move || {
+                barrier.wait();
+                router.unregister_connection(connection_id);
+            }));
+        }
+        barrier.wait();
+        for worker in workers {
+            worker.join().expect("unregister worker");
+        }
+        assert_eq!(router.status().active_connections, 0);
+        assert!(router.routes.is_empty());
+    }
+
+    #[test]
+    fn cleanup_cannot_remove_a_concurrently_repopulated_bucket() {
+        let router = Arc::new(Router::new(RouterConfig::default()));
+        let first = router
+            .register_connection("tenant-a", DeliveryProtocol::WebSocket, None)
+            .expect("first registration");
+        let mut second = router
+            .register_connection("tenant-a", DeliveryProtocol::Sse, None)
+            .expect("second registration");
+        let first_id = SubscriptionId::new("first").expect("id");
+        router
+            .subscribe(
+                first.connection_id,
+                first_id.clone(),
+                filter("tenant-a", Some("news")),
+            )
+            .expect("first subscribe");
+        let barrier = Arc::new(Barrier::new(3));
+
+        let remove = {
+            let router = Arc::clone(&router);
+            let barrier = Arc::clone(&barrier);
+            let connection_id = first.connection_id;
+            thread::spawn(move || {
+                barrier.wait();
+                router.unsubscribe(connection_id, &first_id)
+            })
+        };
+        let repopulate = {
+            let router = Arc::clone(&router);
+            let barrier = Arc::clone(&barrier);
+            let connection_id = second.connection_id;
+            thread::spawn(move || {
+                barrier.wait();
+                router.subscribe(
+                    connection_id,
+                    SubscriptionId::new("second").expect("id"),
+                    filter("tenant-a", Some("news")),
+                )
+            })
+        };
+
+        barrier.wait();
+        remove.join().expect("remove worker").expect("unsubscribe");
+        repopulate
+            .join()
+            .expect("repopulate worker")
+            .expect("subscribe");
+        assert_eq!(router.routes.len(), 1);
+        assert_eq!(router.status().subscriptions, 1);
+        let report = router.dispatch(message("tenant-a", "news"));
+        assert_eq!(report.matched_subscriptions, 1);
+        assert_eq!(report.delivered_connections, 1);
+        let delivery = second.receiver.try_recv().expect("second delivery");
+        assert_eq!(delivery.subscription_ids[0].as_str(), "second");
+    }
+
+    #[test]
+    fn route_cardinality_returns_to_zero_after_churn() {
+        let router = Router::new(RouterConfig::default());
+        for iteration in 0..2_000 {
+            let registration = router
+                .register_connection("tenant-a", DeliveryProtocol::WebSocket, None)
+                .expect("registration");
+            let subscription_id =
+                SubscriptionId::new(format!("sub-{iteration}")).expect("subscription id");
+            router
+                .subscribe(
+                    registration.connection_id,
+                    subscription_id.clone(),
+                    filter("tenant-a", Some("news")),
+                )
+                .expect("subscribe");
+            if iteration % 2 == 0 {
+                router
+                    .unsubscribe(registration.connection_id, &subscription_id)
+                    .expect("unsubscribe");
+            }
+            router.unregister_connection(registration.connection_id);
+        }
+        assert_eq!(router.status().active_connections, 0);
+        assert_eq!(router.status().subscriptions, 0);
+        assert!(router.routes.is_empty());
     }
 }

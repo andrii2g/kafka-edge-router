@@ -235,3 +235,76 @@ impl Default for LoggingConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeMap, sync::Arc};
+
+    use router_core::RouteFilter;
+    use router_webhook::WebhookDestinationConfig;
+
+    use super::AppConfig;
+
+    fn webhook(queue_capacity: usize) -> WebhookDestinationConfig {
+        WebhookDestinationConfig {
+            id: "destination-a".to_owned(),
+            url: "https://example.com/events".to_owned(),
+            filter: RouteFilter {
+                tenant_id: Arc::from("tenant-a"),
+                kind: None,
+                message_type: None,
+                channel: None,
+                actor_id: None,
+                audience_type: None,
+                audience_id: None,
+            },
+            queue_capacity,
+            timeout_ms: 1_000,
+            max_attempts: 3,
+            initial_backoff_ms: 10,
+            max_backoff_ms: 100,
+            signing_secret: None,
+            headers: BTreeMap::new(),
+            allowed_hosts: Vec::new(),
+            allow_private_ips: false,
+            allow_http: false,
+        }
+    }
+
+    #[test]
+    fn queue_cap_hierarchy_accepts_exact_limits() {
+        let mut config = AppConfig::default();
+        config.router.default_queue_capacity = 8;
+        config.router.max_queue_capacity = 8;
+        config.api.stream_queue_capacity = 8;
+        config.api.max_stream_queue_capacity = 8;
+        assert!(config.validate_listener_and_limits().is_ok());
+    }
+
+    #[test]
+    fn queue_cap_hierarchy_rejects_zero_and_live_over_limit() {
+        let mut zero = AppConfig::default();
+        zero.api.stream_queue_capacity = 0;
+        assert!(zero.validate_listener_and_limits().is_err());
+
+        let mut over = AppConfig::default();
+        over.router.max_queue_capacity = 8;
+        over.api.stream_queue_capacity = 8;
+        over.api.max_stream_queue_capacity = 9;
+        assert!(over.validate_listener_and_limits().is_err());
+    }
+
+    #[test]
+    fn static_webhook_queue_capacity_respects_core_cap() {
+        for (capacity, expected_valid) in [(0, false), (8, true), (9, false)] {
+            let mut config = AppConfig::default();
+            config.router.max_queue_capacity = 8;
+            config.webhooks.destinations = vec![webhook(capacity)];
+            assert_eq!(
+                config.validate_webhooks().is_ok(),
+                expected_valid,
+                "webhook queue capacity {capacity}"
+            );
+        }
+    }
+}

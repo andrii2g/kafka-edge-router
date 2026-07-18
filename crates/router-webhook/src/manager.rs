@@ -3,7 +3,7 @@
 use std::{net::IpAddr, sync::Arc, time::Duration};
 
 use bytes::Bytes;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use http::{HeaderName, HeaderValue, StatusCode};
 use reqwest::{redirect::Policy, Client, Url};
 use router_core::{

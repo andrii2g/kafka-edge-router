@@ -22,7 +22,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::{transport::Server, Request, Response, Status, Streaming};
 use tracing::warn;
 
-use crate::{ApiError, ApiState, Principal};
+use crate::{state::ConnectionGuard, ApiError, ApiState, Principal};
 
 /// Serves the public gRPC API until shutdown.
 pub async fn serve_grpc(
@@ -269,14 +269,9 @@ impl KafkaRouter for GrpcService {
 }
 
 fn grpc_queue_capacity(state: &ApiState, requested: Option<usize>) -> Result<usize, Status> {
-    let capacity = requested.unwrap_or(state.config.stream_queue_capacity);
-    if capacity == 0 || capacity > state.config.max_stream_queue_capacity {
-        return Err(Status::invalid_argument(format!(
-            "queue_capacity must be between 1 and {}",
-            state.config.max_stream_queue_capacity
-        )));
-    }
-    Ok(capacity)
+    crate::state::resolve_stream_queue_capacity(&state.config, requested).map_err(|maximum| {
+        Status::invalid_argument(format!("queue_capacity must be between 1 and {maximum}"))
+    })
 }
 
 fn grpc_subscribe(
@@ -354,25 +349,5 @@ fn proto_delivery(delivery: &Delivery) -> ServerEvent {
                 payload: delivery.message.payload.to_vec(),
             }),
         })),
-    }
-}
-
-struct ConnectionGuard {
-    router: Arc<Router>,
-    connection_id: ConnectionId,
-}
-
-impl ConnectionGuard {
-    fn new(router: Arc<Router>, connection_id: ConnectionId) -> Self {
-        Self {
-            router,
-            connection_id,
-        }
-    }
-}
-
-impl Drop for ConnectionGuard {
-    fn drop(&mut self) {
-        self.router.unregister_connection(self.connection_id);
     }
 }

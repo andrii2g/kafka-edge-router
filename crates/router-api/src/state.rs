@@ -5,7 +5,7 @@ use std::sync::{
     Arc,
 };
 
-use router_core::{MessagePublisher, Router};
+use router_core::{ConnectionId, MessagePublisher, Router};
 use serde::Deserialize;
 
 use crate::{AuthConfig, Authenticator};
@@ -49,6 +49,17 @@ impl Default for ApiConfig {
             sse_keep_alive_secs: default_sse_keep_alive_secs(),
         }
     }
+}
+
+pub(crate) fn resolve_stream_queue_capacity(
+    config: &ApiConfig,
+    requested: Option<usize>,
+) -> Result<usize, usize> {
+    let capacity = requested.unwrap_or(config.stream_queue_capacity);
+    if capacity == 0 || capacity > config.max_stream_queue_capacity {
+        return Err(config.max_stream_queue_capacity);
+    }
+    Ok(capacity)
 }
 
 /// Mutable liveness/readiness gates exposed through HTTP and gRPC status APIs.
@@ -111,5 +122,79 @@ impl ApiState {
             health,
             config,
         }
+    }
+}
+
+pub(crate) struct ConnectionGuard {
+    router: Arc<Router>,
+    connection_id: ConnectionId,
+}
+
+impl ConnectionGuard {
+    pub(crate) fn new(router: Arc<Router>, connection_id: ConnectionId) -> Self {
+        Self {
+            router,
+            connection_id,
+        }
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.router.unregister_connection(self.connection_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use router_core::{DeliveryProtocol, RouteFilter, Router, RouterConfig, SubscriptionId};
+
+    use super::{resolve_stream_queue_capacity, ApiConfig, ConnectionGuard};
+
+    #[test]
+    fn live_stream_queue_capacity_boundaries() {
+        let config = ApiConfig {
+            stream_queue_capacity: 4,
+            max_stream_queue_capacity: 8,
+            ..ApiConfig::default()
+        };
+
+        assert_eq!(resolve_stream_queue_capacity(&config, None), Ok(4));
+        assert_eq!(resolve_stream_queue_capacity(&config, Some(8)), Ok(8));
+        assert_eq!(resolve_stream_queue_capacity(&config, Some(0)), Err(8));
+        assert_eq!(resolve_stream_queue_capacity(&config, Some(9)), Err(8));
+    }
+
+    #[test]
+    fn repeated_connection_guard_drops_are_idempotent() {
+        let router = Arc::new(Router::new(RouterConfig::default()));
+        let registration = router
+            .register_connection("tenant-a", DeliveryProtocol::WebSocket, None)
+            .expect("registration");
+        router
+            .subscribe(
+                registration.connection_id,
+                SubscriptionId::new("subscription-a").expect("subscription id"),
+                RouteFilter {
+                    tenant_id: Arc::from("tenant-a"),
+                    kind: None,
+                    message_type: None,
+                    channel: None,
+                    actor_id: None,
+                    audience_type: None,
+                    audience_id: None,
+                },
+            )
+            .expect("subscribe");
+
+        let first = ConnectionGuard::new(Arc::clone(&router), registration.connection_id);
+        let second = ConnectionGuard::new(Arc::clone(&router), registration.connection_id);
+        drop(first);
+        drop(second);
+
+        assert_eq!(router.status().active_connections, 0);
+        assert_eq!(router.status().subscriptions, 0);
     }
 }
