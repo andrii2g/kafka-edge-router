@@ -35,6 +35,10 @@ pub struct Metrics {
     webhook_attempts: AtomicU64,
     webhook_successes: AtomicU64,
     webhook_failures: AtomicU64,
+    webhook_durable_commands: AtomicU64,
+    webhook_retries_scheduled: AtomicU64,
+    webhook_recovery_replays: AtomicU64,
+    webhook_dead_letters: AtomicU64,
     http_publish_attempts: AtomicU64,
     grpc_publish_attempts: AtomicU64,
     http_publish_acknowledged: AtomicU64,
@@ -132,6 +136,29 @@ impl Metrics {
         self.webhook_failures.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Records a broker-acknowledged initial durable command.
+    pub fn record_webhook_durable_command(&self) {
+        self.webhook_durable_commands
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a broker-acknowledged persisted retry.
+    pub fn record_webhook_retry_scheduled(&self) {
+        self.webhook_retries_scheduled
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a retry command processed during startup recovery.
+    pub fn record_webhook_recovery_replay(&self) {
+        self.webhook_recovery_replays
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a broker-acknowledged dead-letter command.
+    pub fn record_webhook_dead_letter(&self) {
+        self.webhook_dead_letters.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Records one authenticated or rejected public publish attempt.
     pub fn record_publish_attempt(&self, protocol: PublishProtocol) {
         let counter = match protocol {
@@ -185,6 +212,10 @@ impl Metrics {
             webhook_failures: self.webhook_failures.load(Ordering::Relaxed),
             http_publish_attempts: self.http_publish_attempts.load(Ordering::Relaxed),
             grpc_publish_attempts: self.grpc_publish_attempts.load(Ordering::Relaxed),
+            webhook_durable_commands: self.webhook_durable_commands.load(Ordering::Relaxed),
+            webhook_retries_scheduled: self.webhook_retries_scheduled.load(Ordering::Relaxed),
+            webhook_recovery_replays: self.webhook_recovery_replays.load(Ordering::Relaxed),
+            webhook_dead_letters: self.webhook_dead_letters.load(Ordering::Relaxed),
             http_publish_acknowledged: self.http_publish_acknowledged.load(Ordering::Relaxed),
             grpc_publish_acknowledged: self.grpc_publish_acknowledged.load(Ordering::Relaxed),
             http_publish_failures: self.http_publish_failures.load(Ordering::Relaxed),
@@ -245,6 +276,15 @@ pub struct MetricsSnapshot {
     /// Broker-acknowledged HTTP publishes.
     pub http_publish_acknowledged: u64,
     /// Broker-acknowledged gRPC publishes.
+    /// Broker-acknowledged initial durable commands.
+    pub webhook_durable_commands: u64,
+    /// Broker-acknowledged persisted retries.
+    pub webhook_retries_scheduled: u64,
+    /// Retry commands replayed during startup recovery.
+    pub webhook_recovery_replays: u64,
+    /// Broker-acknowledged dead-letter commands.
+    pub webhook_dead_letters: u64,
+    /// Broker-acknowledged gRPC publishes.
     pub grpc_publish_acknowledged: u64,
     /// Rejected or failed HTTP publishes.
     pub http_publish_failures: u64,
@@ -301,6 +341,14 @@ pub fn render_prometheus(
             "router_webhook_successes_total {}\n",
             "# TYPE router_webhook_failures_total counter\n",
             "router_webhook_failures_total {}\n",
+            "# TYPE router_webhook_durable_commands_total counter\n",
+            "router_webhook_durable_commands_total {}\n",
+            "# TYPE router_webhook_retries_scheduled_total counter\n",
+            "router_webhook_retries_scheduled_total {}\n",
+            "# TYPE router_webhook_recovery_replays_total counter\n",
+            "router_webhook_recovery_replays_total {}\n",
+            "# TYPE router_webhook_dead_letters_total counter\n",
+            "router_webhook_dead_letters_total {}\n",
             "# TYPE router_publish_attempts_total counter\n",
             "router_publish_attempts_total{{protocol=\"http\"}} {}\n",
             "router_publish_attempts_total{{protocol=\"grpc\"}} {}\n",
@@ -334,6 +382,10 @@ pub fn render_prometheus(
         metrics.webhook_attempts,
         metrics.webhook_successes,
         metrics.webhook_failures,
+        metrics.webhook_durable_commands,
+        metrics.webhook_retries_scheduled,
+        metrics.webhook_recovery_replays,
+        metrics.webhook_dead_letters,
         metrics.http_publish_attempts,
         metrics.grpc_publish_attempts,
         metrics.http_publish_acknowledged,

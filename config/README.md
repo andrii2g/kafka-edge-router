@@ -48,3 +48,18 @@ budget; the HTTP request-body limit independently caps the complete JSON request
 tenant matching. Subscription credentials do not imply publish permission. In
 `static_bearer` mode every listed publish tenant must also appear as a bearer-token
 mapping.
+## Webhook delivery mode
+
+`webhooks.mode` is either `volatile` or `durable`; modes are never mixed. Volatile
+mode uses each destination's bounded queue and loses pending retries on restart. Durable
+mode requires at least one destination and distinct delivery, retry, and dead-letter
+topics with equal partition counts.
+
+`webhooks.durable.max_record_bytes` bounds serialized command allocation.
+`max_recovery_records` bounds retry state materialized during one startup pass.
+`delivery_timeout_ms` bounds Kafka acknowledgement waits. Durable Kafka properties may
+set authentication/compression, but cannot override manual commits, idempotent production,
+all-replica acknowledgements, earliest recovery, or the range assignment strategy.
+
+See [the durable webhook runbook](../docs/WEBHOOK_OPERATIONS.md) before provisioning,
+changing topic partitions/retention, or replaying dead letters.

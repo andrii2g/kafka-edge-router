@@ -9,12 +9,16 @@ use reqwest::{redirect::Policy, Client, Url};
 use router_core::{
     encode_delivery_json, ConnectionId, Delivery, DeliveryProtocol, Router, SubscriptionId,
 };
+use router_kafka::PreCommitSink;
 use sha2::Sha256;
 use thiserror::Error;
 use tokio::{sync::watch, task::JoinSet, time::sleep};
 use tracing::{debug, error, info, warn};
 
-use crate::{validate_destination_url, WebhookConfig, WebhookDestinationConfig};
+use crate::{
+    durable::{build_durable_runtime, DurableWebhookSink, DurableWorker},
+    validate_destination_url, WebhookConfig, WebhookDeliveryMode, WebhookDestinationConfig,
+};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -49,49 +53,117 @@ pub enum WebhookError {
         /// Core error.
         reason: String,
     },
+    /// Durable Kafka adapter construction failed.
+    #[error("failed to construct durable webhook adapter: {0}")]
+    Durable(String),
+    /// A destination worker failed after startup.
+    #[error("webhook worker {id} failed: {reason}")]
+    Worker {
+        /// Destination id.
+        id: String,
+        /// Worker failure.
+        reason: String,
+    },
 }
 
 /// Owns one independent worker per configured webhook destination.
 pub struct WebhookManager {
     workers: Vec<WebhookWorker>,
+    durable_workers: Vec<DurableWorker>,
+    durable_sink: Option<Arc<DurableWebhookSink>>,
 }
 
 impl WebhookManager {
-    /// Validates destinations, registers filters, and creates HTTP clients.
+    /// Validates destinations and constructs the selected explicit delivery mode.
     pub fn new(config: &WebhookConfig, router: &Arc<Router>) -> Result<Self, WebhookError> {
         if !config.enabled {
             return Ok(Self {
                 workers: Vec::new(),
+                durable_workers: Vec::new(),
+                durable_sink: None,
             });
         }
-        let mut workers = Vec::with_capacity(config.destinations.len());
-        for destination in &config.destinations {
-            workers.push(WebhookWorker::new(destination.clone(), Arc::clone(router))?);
+        match config.mode {
+            WebhookDeliveryMode::Volatile => {
+                let mut workers = Vec::with_capacity(config.destinations.len());
+                for destination in &config.destinations {
+                    workers.push(WebhookWorker::new(destination.clone(), Arc::clone(router))?);
+                }
+                Ok(Self {
+                    workers,
+                    durable_workers: Vec::new(),
+                    durable_sink: None,
+                })
+            }
+            WebhookDeliveryMode::Durable => {
+                let runtime = build_durable_runtime(config, Arc::clone(router))?;
+                Ok(Self {
+                    workers: Vec::new(),
+                    durable_workers: runtime.workers,
+                    durable_sink: Some(runtime.sink),
+                })
+            }
         }
-        Ok(Self { workers })
     }
 
-    /// Runs all destination workers until shutdown. Disabled mode remains alive
-    /// so the daemon does not interpret an empty manager as a component failure.
-    pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
-        if self.workers.is_empty() {
+    /// Returns the durable source-commit barrier when durable mode is selected.
+    pub fn pre_commit_sink(&self) -> Option<Arc<dyn PreCommitSink>> {
+        self.durable_sink
+            .as_ref()
+            .map(|sink| Arc::clone(sink) as Arc<dyn PreCommitSink>)
+    }
+
+    /// Runs all destination workers until shutdown. Disabled mode remains alive.
+    pub async fn run(self, mut shutdown: watch::Receiver<bool>) -> Result<(), WebhookError> {
+        if self.workers.is_empty() && self.durable_workers.is_empty() {
             while !*shutdown.borrow() {
                 if shutdown.changed().await.is_err() {
                     break;
                 }
             }
-            return;
+            return Ok(());
         }
 
         let mut tasks = JoinSet::new();
         for worker in self.workers {
-            let _abort_handle = tasks.spawn(worker.run(shutdown.clone()));
+            let id = worker.id.clone();
+            let worker_shutdown = shutdown.clone();
+            let _abort_handle = tasks.spawn(async move {
+                worker
+                    .run(worker_shutdown)
+                    .await
+                    .map_err(|reason| WebhookError::Worker { id, reason })
+            });
+        }
+        for worker in self.durable_workers {
+            let id = worker.id().to_owned();
+            let worker_shutdown = shutdown.clone();
+            let _abort_handle = tasks.spawn(async move {
+                worker
+                    .run(worker_shutdown)
+                    .await
+                    .map_err(|reason| WebhookError::Worker { id, reason })
+            });
         }
         while let Some(result) = tasks.join_next().await {
-            if let Err(join_error) = result {
-                error!(error = %join_error, "webhook worker task failed");
+            match result {
+                Ok(Ok(())) if *shutdown.borrow() => {}
+                Ok(Ok(())) => {
+                    return Err(WebhookError::Worker {
+                        id: "unknown".to_owned(),
+                        reason: "worker exited before shutdown".to_owned(),
+                    });
+                }
+                Ok(Err(error)) => return Err(error),
+                Err(error) => {
+                    return Err(WebhookError::Worker {
+                        id: "unknown".to_owned(),
+                        reason: error.to_string(),
+                    });
+                }
             }
         }
+        Ok(())
     }
 }
 
@@ -171,7 +243,7 @@ impl WebhookWorker {
         })
     }
 
-    async fn run(mut self, mut shutdown: watch::Receiver<bool>) {
+    async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> Result<(), String> {
         info!(webhook_id = %self.id, url = %self.url, "webhook worker started");
         loop {
             if *shutdown.borrow() {
@@ -185,13 +257,17 @@ impl WebhookWorker {
                 }
                 delivery = self.receiver.recv() => {
                     let Some(delivery) = delivery else {
-                        break;
+                        if *shutdown.borrow() {
+                            break;
+                        }
+                        return Err("core delivery queue closed".to_owned());
                     };
                     self.deliver(delivery).await;
                 }
             }
         }
         info!(webhook_id = %self.id, "webhook worker stopped");
+        Ok(())
     }
 
     async fn deliver(&self, delivery: Delivery) {
@@ -293,7 +369,7 @@ impl Drop for WebhookWorker {
     }
 }
 
-fn parse_headers(
+pub(crate) fn parse_headers(
     values: &std::collections::BTreeMap<String, String>,
 ) -> Result<Vec<(HeaderName, HeaderValue)>, WebhookError> {
     let mut headers = Vec::with_capacity(values.len());
@@ -330,14 +406,14 @@ fn parse_headers(
     Ok(headers)
 }
 
-fn retryable_status(status: StatusCode) -> bool {
+pub(crate) fn retryable_status(status: StatusCode) -> bool {
     matches!(
         status,
         StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_EARLY | StatusCode::TOO_MANY_REQUESTS
     ) || status.is_server_error()
 }
 
-fn signature(secret: &[u8], body: &[u8]) -> String {
+pub(crate) fn signature(secret: &[u8], body: &[u8]) -> String {
     let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts arbitrary key lengths");
     mac.update(body);
     format!("sha256={}", hex::encode(mac.finalize().into_bytes()))

@@ -73,9 +73,10 @@ writer and bounded receiver.
 
 ### router-webhook
 
-Models each static destination as a core connection. This gives webhooks the same route
-index and backpressure behavior as live clients while keeping HTTP retries outside the
-consumer loop.
+Models every static destination as a bounded core connection. Volatile workers deliver
+from those queues directly. Durable mode drains the same core delivery queues, persists
+destination-keyed commands through a pre-commit Kafka sink, and consumes delivery/retry topics in fenced
+destination groups. HTTP and retry waits remain outside the source consumer loop.
 
 ### router-proto
 
@@ -312,7 +313,7 @@ generation fencing, retransmission policy, peer backpressure, and failure tests.
 Safe extension points include:
 
 - an authorization policy called before core subscription;
-- a durable webhook dispatcher backed by Kafka topics;
+
 - OpenTelemetry spans around decode, match, enqueue, and network write;
 - a route-index actor implementation if benchmarks show lock contention;
 - peer forwarding behind a separate internal crate and ADR; and

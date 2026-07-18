@@ -104,20 +104,21 @@ Use `message_id` and webhook `idempotency-key` to make application handling idem
 
 ## Webhooks
 
-Current webhook retry is bounded but volatile:
+Webhook mode is explicit and process-wide. `volatile` uses a bounded destination queue
+and in-memory retry sleeps; restart loses queued or sleeping work.
 
-```text
-maximum attempts
-initial backoff
-exponential factor 2
-maximum backoff
-request timeout
-bounded destination queue
-```
+`durable` matches static filters through compiled route keys and broker-acknowledges one
+destination-keyed command before committing the source record. Retryable HTTP outcomes
+publish the next attempt and `next_attempt_at_ms` before committing the current command.
+Permanent outcomes and exhausted retries publish to the dead-letter topic before commit.
+Producer failure stops the component with the input uncommitted.
 
-A process restart loses queued or sleeping deliveries. Task 007 introduces a durable
-delivery topic, retry scheduling, attempt metadata, and dead-letter topic. Only after
-that work and its recovery tests may documentation describe webhook delivery as durable.
+A crash after remote success but before Kafka commit causes a duplicate request. A crash
+after command, retry, or DLQ acknowledgement but before input commit can duplicate Kafka
+state. The original message id remains the `idempotency-key`; receivers must persist
+their idempotency decision. Records contain the delivery envelope and routing/source
+identifiers but never URL credentials, signing secrets, configured headers, or Kafka
+passwords. See [`WEBHOOK_OPERATIONS.md`](WEBHOOK_OPERATIONS.md) and ADR 0005.
 
 ## Publishing
 
