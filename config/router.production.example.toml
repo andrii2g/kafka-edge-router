@@ -18,6 +18,7 @@ grpc_keep_alive_interval_secs = 30
 grpc_keep_alive_timeout_secs = 10
 grpc_health_enabled = true
 grpc_reflection_enabled = false
+publish_max_payload_bytes = 1048576
 
 [router]
 default_queue_capacity = 512
@@ -30,6 +31,7 @@ slow_consumer_strikes = 3
 mode = "static_bearer"
 tenant_header = "x-tenant-id"
 bearer_tokens = { "REPLACE_TOKEN_TENANT_A" = "tenant-a", "REPLACE_TOKEN_TENANT_B" = "tenant-b" }
+publish_tenants = ["tenant-a", "tenant-b"]
 
 [kafka.consumer]
 brokers = "kafka-0.kafka:9092,kafka-1.kafka:9092,kafka-2.kafka:9092"

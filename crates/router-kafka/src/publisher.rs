@@ -1,19 +1,17 @@
 //! Idempotent Kafka producer used by public publish endpoints.
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use rdkafka::{
+    error::{KafkaError, RDKafkaErrorCode},
     message::{Header, OwnedHeaders},
     producer::{FutureProducer, FutureRecord},
     util::Timeout,
     ClientConfig,
 };
-use router_core::{
-    MessagePublisher, PublishCommand, PublishError, PublishReceipt, RoutingMetadata,
-};
+use router_core::{MessagePublisher, PublishCommand, PublishError, PublishReceipt};
 use thiserror::Error;
-use uuid::Uuid;
 
 use crate::KafkaProducerConfig;
 
@@ -35,18 +33,9 @@ pub struct KafkaPublisher {
 impl KafkaPublisher {
     /// Creates a producer from configuration.
     pub fn new(config: &KafkaProducerConfig) -> Result<Self, KafkaPublisherError> {
-        let mut client = ClientConfig::new();
-        for (key, value) in &config.properties {
-            client.set(key, value);
-        }
-        // Apply delivery guarantees last so free-form properties cannot weaken them.
-        client
-            .set("bootstrap.servers", &config.brokers)
-            .set("client.id", &config.client_id)
-            .set("message.timeout.ms", config.delivery_timeout_ms.to_string())
-            .set("enable.idempotence", "true")
-            .set("acks", "all");
-        let producer = client.create().map_err(KafkaPublisherError::Create)?;
+        let producer = producer_client_config(config)
+            .create()
+            .map_err(KafkaPublisherError::Create)?;
         Ok(Self {
             producer,
             topic: config.topic.clone(),
@@ -55,29 +44,26 @@ impl KafkaPublisher {
     }
 }
 
+fn producer_client_config(config: &KafkaProducerConfig) -> ClientConfig {
+    let mut client = ClientConfig::new();
+    for (key, value) in &config.properties {
+        client.set(key, value);
+    }
+    // Apply delivery guarantees last so free-form properties cannot weaken them.
+    client
+        .set("bootstrap.servers", &config.brokers)
+        .set("client.id", &config.client_id)
+        .set("message.timeout.ms", config.delivery_timeout_ms.to_string())
+        .set("enable.idempotence", "true")
+        .set("acks", "all");
+    client
+}
+
 #[async_trait]
 impl MessagePublisher for KafkaPublisher {
     async fn publish(&self, command: PublishCommand) -> Result<PublishReceipt, PublishError> {
-        let message_id = command
-            .message_id
-            .as_deref()
-            .map_or_else(|| Uuid::new_v4().to_string(), str::to_owned);
-
-        RoutingMetadata {
-            message_id: Arc::from(message_id.as_str()),
-            tenant_id: Arc::clone(&command.tenant_id),
-            kind: command.kind.clone(),
-            message_type: command.message_type.clone(),
-            channel: command.channel.clone(),
-            actor_id: command.actor_id.clone(),
-            audience_type: command.audience_type.clone(),
-            audience_id: command.audience_id.clone(),
-            content_type: Arc::clone(&command.content_type),
-            timestamp_ms: None,
-            source: None,
-        }
-        .validate()
-        .map_err(|error| PublishError::invalid_input(error.to_string()))?;
+        command.validate()?;
+        let message_id = command.message_id.to_string();
 
         let mut headers = OwnedHeaders::new()
             .insert(Header {
@@ -108,7 +94,7 @@ impl MessagePublisher for KafkaPublisher {
             .producer
             .send(record, Timeout::After(self.delivery_timeout))
             .await
-            .map_err(|(error, _)| PublishError::backend(error.to_string()))?;
+            .map_err(|(error, _)| classify_delivery_error(&error))?;
 
         Ok(PublishReceipt {
             message_id,
@@ -129,7 +115,23 @@ fn insert_optional(headers: OwnedHeaders, key: &'static str, value: Option<&str>
     }
 }
 
+fn classify_delivery_error(error: &KafkaError) -> PublishError {
+    match error.rdkafka_error_code() {
+        Some(RDKafkaErrorCode::QueueFull) => PublishError::queue_full(error.to_string()),
+        Some(
+            RDKafkaErrorCode::MessageTimedOut
+            | RDKafkaErrorCode::OperationTimedOut
+            | RDKafkaErrorCode::RequestTimedOut
+            | RDKafkaErrorCode::TimedOutQueue,
+        ) => PublishError::timeout(error.to_string()),
+        _ => PublishError::backend(error.to_string()),
+    }
+}
+
 fn kafka_key(command: &PublishCommand) -> String {
+    if let Some(ordering_key) = &command.ordering_key {
+        return format!("{}:explicit:{ordering_key}", command.tenant_id);
+    }
     match (&command.audience_type, &command.audience_id) {
         (Some(audience_type), Some(audience_id)) => {
             format!("{}:{audience_type}:{audience_id}", command.tenant_id)
@@ -143,17 +145,18 @@ fn kafka_key(command: &PublishCommand) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::BTreeMap, sync::Arc};
 
     use bytes::Bytes;
-    use router_core::PublishCommand;
+    use rdkafka::error::{KafkaError, RDKafkaErrorCode};
+    use router_core::{PublishCommand, PublishErrorKind};
 
-    use super::kafka_key;
+    use super::{classify_delivery_error, kafka_key, producer_client_config};
+    use crate::KafkaProducerConfig;
 
-    #[test]
-    fn audience_key_preserves_entity_ordering() {
-        let command = PublishCommand {
-            message_id: None,
+    fn command() -> PublishCommand {
+        PublishCommand {
+            message_id: Arc::from("message-1"),
             tenant_id: Arc::from("tenant-a"),
             kind: None,
             message_type: None,
@@ -161,9 +164,58 @@ mod tests {
             actor_id: None,
             audience_type: Some(Arc::from("team")),
             audience_id: Some(Arc::from("team-7")),
+            ordering_key: None,
             content_type: Arc::from("application/json"),
             payload: Bytes::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn audience_and_explicit_keys_preserve_tenant_ordering() {
+        let mut command = command();
         assert_eq!(kafka_key(&command), "tenant-a:team:team-7");
+
+        command.ordering_key = Some(Arc::from("invoice-42"));
+        assert_eq!(
+            kafka_key(&command),
+            "tenant-a:explicit:invoice-42",
+            "explicit keys must remain tenant namespaced"
+        );
+    }
+
+    #[test]
+    fn producer_invariants_override_free_form_properties() {
+        let config = KafkaProducerConfig {
+            brokers: "broker:9092".to_owned(),
+            client_id: "publisher".to_owned(),
+            delivery_timeout_ms: 3210,
+            properties: BTreeMap::from([
+                ("enable.idempotence".to_owned(), "false".to_owned()),
+                ("acks".to_owned(), "1".to_owned()),
+                ("message.timeout.ms".to_owned(), "999".to_owned()),
+            ]),
+            ..KafkaProducerConfig::default()
+        };
+        let client = producer_client_config(&config);
+
+        assert_eq!(client.get("enable.idempotence"), Some("true"));
+        assert_eq!(client.get("acks"), Some("all"));
+        assert_eq!(client.get("message.timeout.ms"), Some("3210"));
+    }
+
+    #[test]
+    fn delivery_errors_keep_timeout_and_queue_full_classifications() {
+        let queue_full =
+            classify_delivery_error(&KafkaError::MessageProduction(RDKafkaErrorCode::QueueFull));
+        assert_eq!(queue_full.kind(), PublishErrorKind::QueueFull);
+
+        let timeout = classify_delivery_error(&KafkaError::MessageProduction(
+            RDKafkaErrorCode::MessageTimedOut,
+        ));
+        assert_eq!(timeout.kind(), PublishErrorKind::Timeout);
+
+        let backend =
+            classify_delivery_error(&KafkaError::MessageProduction(RDKafkaErrorCode::Unknown));
+        assert_eq!(backend.kind(), PublishErrorKind::Backend);
     }
 }

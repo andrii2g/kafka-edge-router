@@ -22,6 +22,12 @@ pub enum ApiError {
     /// Kafka publishing is disabled.
     #[error("publishing is not configured")]
     PublisherUnavailable,
+    /// Kafka did not acknowledge before the configured deadline.
+    #[error("publish acknowledgement timed out")]
+    PublisherTimeout,
+    /// The bounded Kafka producer queue is saturated.
+    #[error("publisher queue is full")]
+    PublisherQueueFull,
     /// Backend operation failed.
     #[error("{0}")]
     Backend(String),
@@ -36,6 +42,8 @@ impl ApiError {
             Self::Forbidden => tonic::Status::permission_denied(message),
             Self::BadRequest(_) => tonic::Status::invalid_argument(message),
             Self::PublisherUnavailable => tonic::Status::failed_precondition(message),
+            Self::PublisherTimeout => tonic::Status::deadline_exceeded(message),
+            Self::PublisherQueueFull => tonic::Status::resource_exhausted(message),
             Self::Backend(_) => tonic::Status::internal(message),
         }
     }
@@ -45,7 +53,10 @@ impl ApiError {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
-            Self::PublisherUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::PublisherUnavailable | Self::PublisherQueueFull => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+            Self::PublisherTimeout => StatusCode::GATEWAY_TIMEOUT,
             Self::Backend(_) => StatusCode::BAD_GATEWAY,
         }
     }
@@ -56,6 +67,8 @@ impl ApiError {
             Self::Forbidden => "forbidden",
             Self::BadRequest(_) => "bad_request",
             Self::PublisherUnavailable => "publisher_unavailable",
+            Self::PublisherTimeout => "publisher_timeout",
+            Self::PublisherQueueFull => "publisher_queue_full",
             Self::Backend(_) => "backend_error",
         }
     }

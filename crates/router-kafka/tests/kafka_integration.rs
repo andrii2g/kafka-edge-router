@@ -238,7 +238,7 @@ fn valid_headers(message_id: &'static str) -> OwnedHeaders {
 
 fn command(index: u8) -> PublishCommand {
     PublishCommand {
-        message_id: Some(Arc::from(format!("ordered-{index}"))),
+        message_id: Arc::from(format!("ordered-{index}")),
         tenant_id: Arc::from("tenant-a"),
         kind: Some(Arc::from("content")),
         message_type: None,
@@ -246,6 +246,7 @@ fn command(index: u8) -> PublishCommand {
         actor_id: None,
         audience_type: Some(Arc::from("team")),
         audience_id: Some(Arc::from("team-7")),
+        ordering_key: None,
         content_type: Arc::from("application/octet-stream"),
         payload: Bytes::from(vec![index]),
     }
@@ -274,6 +275,12 @@ async fn equal_entity_keys_preserve_partition_order_through_core() {
     let mut partition = None;
     for index in 0..8 {
         let receipt = publisher.publish(command(index)).await.expect("publish");
+        assert_eq!(receipt.message_id, format!("ordered-{index}"));
+        assert_eq!(receipt.topic, harness.topic);
+        assert!(
+            receipt.offset >= 0,
+            "broker acknowledgement must include an offset"
+        );
         assert_eq!(
             *partition.get_or_insert(receipt.partition),
             receipt.partition,

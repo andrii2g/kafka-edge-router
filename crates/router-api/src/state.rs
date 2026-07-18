@@ -63,6 +63,10 @@ fn default_grpc_health_enabled() -> bool {
     true
 }
 
+fn default_publish_max_payload_bytes() -> usize {
+    1_048_576
+}
+
 /// API limits shared by protocol adapters.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
@@ -95,6 +99,8 @@ pub struct ApiConfig {
     pub grpc_health_enabled: bool,
     /// Expose server reflection. Keep disabled in production.
     pub grpc_reflection_enabled: bool,
+    /// Maximum raw payload accepted by HTTP or gRPC publishing.
+    pub publish_max_payload_bytes: usize,
 }
 
 impl Default for ApiConfig {
@@ -114,6 +120,7 @@ impl Default for ApiConfig {
             grpc_keep_alive_timeout_secs: default_grpc_keep_alive_timeout_secs(),
             grpc_health_enabled: default_grpc_health_enabled(),
             grpc_reflection_enabled: false,
+            publish_max_payload_bytes: default_publish_max_payload_bytes(),
         }
     }
 }

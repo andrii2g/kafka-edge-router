@@ -6,8 +6,8 @@ use async_stream::try_stream;
 use bytes::Bytes;
 use futures_util::Stream;
 use router_core::{
-    ConnectionId, Delivery, DeliveryProtocol, PublishCommand, PublishErrorKind, RouteFilter,
-    Router, SubscriptionId,
+    ConnectionId, Delivery, DeliveryProtocol, PublishCommand, PublishErrorKind, PublishProtocol,
+    RouteFilter, Router, SubscriptionId,
 };
 use router_proto::v1::{
     client_command,
@@ -122,6 +122,62 @@ impl GrpcService {
             .authenticator
             .authenticate_grpc(request.metadata(), requested_tenant)
             .map_err(ApiError::into_status)
+    }
+
+    async fn publish_inner(
+        &self,
+        request: Request<PublishRequest>,
+    ) -> Result<Response<PublishResponse>, Status> {
+        let requested_tenant = (!request.get_ref().tenant_id.is_empty())
+            .then_some(request.get_ref().tenant_id.as_str());
+        let principal = self.authenticate(&request, requested_tenant)?;
+        let request = request.into_inner();
+        authorize_tenant(&principal, Some(request.tenant_id.as_str()))
+            .map_err(ApiError::into_status)?;
+        self.state
+            .authenticator
+            .authorize_publish(&principal)
+            .map_err(ApiError::into_status)?;
+
+        let content_type = if request.content_type.is_empty() {
+            "application/octet-stream".to_owned()
+        } else {
+            request.content_type
+        };
+        let command = crate::publish::validate_command(
+            PublishCommand {
+                message_id: crate::publish::effective_message_id(request.message_id),
+                tenant_id: principal.tenant_id,
+                kind: request.kind.map(Arc::from),
+                message_type: request.r#type.map(Arc::from),
+                channel: request.channel.map(Arc::from),
+                actor_id: request.actor_id.map(Arc::from),
+                audience_type: request.audience_type.map(Arc::from),
+                audience_id: request.audience_id.map(Arc::from),
+                ordering_key: request.ordering_key.map(Arc::from),
+                content_type: Arc::from(content_type),
+                payload: Bytes::from(request.payload),
+            },
+            self.state.config.publish_max_payload_bytes,
+        )
+        .map_err(ApiError::into_status)?;
+        let publisher = self
+            .state
+            .publisher
+            .as_ref()
+            .ok_or(ApiError::PublisherUnavailable.into_status())?;
+        let receipt = publisher.publish(command).await.map_err(|error| {
+            if error.kind() == PublishErrorKind::Backend {
+                warn!(error = %error, "Kafka publish failed");
+            }
+            crate::publish::map_publish_error(&error).into_status()
+        })?;
+        Ok(Response::new(PublishResponse {
+            message_id: receipt.message_id,
+            topic: receipt.topic,
+            partition: receipt.partition,
+            offset: receipt.offset,
+        }))
     }
 }
 
@@ -271,49 +327,23 @@ impl KafkaRouter for GrpcService {
         &self,
         request: Request<PublishRequest>,
     ) -> Result<Response<PublishResponse>, Status> {
-        let requested_tenant = (!request.get_ref().tenant_id.is_empty())
-            .then_some(request.get_ref().tenant_id.as_str());
-        let principal = self.authenticate(&request, requested_tenant)?;
-        let request = request.into_inner();
-        authorize_tenant(&principal, Some(request.tenant_id.as_str()))
-            .map_err(ApiError::into_status)?;
-        let publisher = self
-            .state
-            .publisher
-            .as_ref()
-            .ok_or(ApiError::PublisherUnavailable.into_status())?;
-        let content_type = if request.content_type.is_empty() {
-            "application/octet-stream".to_owned()
+        self.state
+            .router
+            .metrics()
+            .record_publish_attempt(PublishProtocol::Grpc);
+        let result = self.publish_inner(request).await;
+        if result.is_ok() {
+            self.state
+                .router
+                .metrics()
+                .record_publish_acknowledged(PublishProtocol::Grpc);
         } else {
-            request.content_type
-        };
-        let receipt = publisher
-            .publish(PublishCommand {
-                message_id: request.message_id.map(Arc::from),
-                tenant_id: principal.tenant_id,
-                kind: request.kind.map(Arc::from),
-                message_type: request.r#type.map(Arc::from),
-                channel: request.channel.map(Arc::from),
-                actor_id: request.actor_id.map(Arc::from),
-                audience_type: request.audience_type.map(Arc::from),
-                audience_id: request.audience_id.map(Arc::from),
-                content_type: Arc::from(content_type),
-                payload: Bytes::from(request.payload),
-            })
-            .await
-            .map_err(|error| match error.kind() {
-                PublishErrorKind::InvalidInput => Status::invalid_argument(error.to_string()),
-                PublishErrorKind::Backend => {
-                    warn!(error = %error, "Kafka publish failed");
-                    Status::internal("publish backend failed")
-                }
-            })?;
-        Ok(Response::new(PublishResponse {
-            message_id: receipt.message_id,
-            topic: receipt.topic,
-            partition: receipt.partition,
-            offset: receipt.offset,
-        }))
+            self.state
+                .router
+                .metrics()
+                .record_publish_failure(PublishProtocol::Grpc);
+        }
+        result
     }
 
     async fn get_status(

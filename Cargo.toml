@@ -35,6 +35,7 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 hex = "0.4"
 hmac = "0.13"
 http = "1"
+mime = "0.3"
 prost = "0.14"
 protoc-bin-vendored = "3"
 rdkafka = { version = "0.39", default-features = false, features = ["tokio", "cmake-build", "libz-static"] }

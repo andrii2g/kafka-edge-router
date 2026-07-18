@@ -110,6 +110,7 @@ message PublishRequest {
   optional string audience_id = 8;
   string content_type = 9;
   bytes payload = 10;
+  optional string ordering_key = 11;
 }
 
 message PublishResponse {
