@@ -10,6 +10,7 @@ All notable changes will be documented here. The project follows Semantic Versio
 
 - Committed `Cargo.lock` for the Rust 1.88 workspace baseline.
 - Added exhaustive and deterministic randomized route-matcher properties, barrier-based subscription lifecycle race tests, queue-cap hierarchy coverage, and Criterion routing benchmarks.
+- Added isolated Kafka contract and broker integration suites for headers, keyed ordering, commits, restart duplicates, and forced rebalances.
 
 ### Changed
 
@@ -20,6 +21,7 @@ All notable changes will be documented here. The project follows Semantic Versio
 - Adapted route candidate inference, Kafka producer delivery receipts, protobuf generation,
   gRPC stream error propagation, and warning-level API drift to the locked dependency APIs.
 - Enforced `--locked` in CI, release, Docker, and standard Make build commands.
+- Reject duplicate routing headers, stop consumption at uncommitted malformed records, and expose Kafka commit-error and rebalance counters.
 - Documented route-mutation linearization, bounded in-flight unsubscribe behavior,
   ThreadSanitizer execution, Loom/Miri rationale, and remaining mutation-lock contention.
 - Unified HTTP and gRPC live-stream queue-cap boundary validation while retaining the

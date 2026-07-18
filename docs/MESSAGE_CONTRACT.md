@@ -21,9 +21,9 @@ All header values are UTF-8 strings.
 | `x-audience-id` | paired | 256 bytes | Must appear with audience type |
 | `x-content-type` | optional | 256 bytes | Defaults to octet-stream |
 
-Identifiers may not be empty or contain control characters. Duplicate headers are not a
-supported producer contract; the decoder currently uses the first matching header.
-Task 002 adds an explicit duplicate-header rejection test or documents a chosen policy.
+Identifiers may not be empty or contain control characters. Header names are matched
+case-insensitively. Duplicate routing headers are rejected, including duplicates that differ
+only by header-name case, so routing never depends on Kafka header order.
 
 ## Payload
 

@@ -3,10 +3,13 @@
 use std::sync::Arc;
 
 use rdkafka::{
-    consumer::{CommitMode, Consumer, StreamConsumer},
+    client::ClientContext,
+    consumer::{BaseConsumer, CommitMode, Consumer, ConsumerContext, Rebalance, StreamConsumer},
+    error::KafkaResult,
+    topic_partition_list::TopicPartitionList,
     ClientConfig, Message,
 };
-use router_core::Router;
+use router_core::{Metrics, Router};
 use thiserror::Error;
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
@@ -24,9 +27,33 @@ pub enum KafkaIngestError {
     Subscribe(#[source] rdkafka::error::KafkaError),
 }
 
+#[derive(Clone)]
+struct RouterConsumerContext {
+    metrics: Arc<Metrics>,
+}
+
+impl ClientContext for RouterConsumerContext {}
+
+impl ConsumerContext for RouterConsumerContext {
+    fn pre_rebalance(&self, _consumer: &BaseConsumer<Self>, rebalance: &Rebalance<'_>) {
+        match rebalance {
+            Rebalance::Assign(_) => self.metrics.record_kafka_rebalance_assignment(),
+            Rebalance::Revoke(_) => self.metrics.record_kafka_rebalance_revocation(),
+            Rebalance::Error(_) => self.metrics.record_kafka_rebalance_error(),
+        }
+    }
+
+    fn commit_callback(&self, result: KafkaResult<()>, _offsets: &TopicPartitionList) {
+        if let Err(commit_error) = result {
+            self.metrics.record_kafka_commit_error();
+            error!(error = %commit_error, "Kafka offset commit failed");
+        }
+    }
+}
+
 /// Kafka record consumer that routes messages into bounded local queues.
 pub struct KafkaIngestor {
-    consumer: StreamConsumer,
+    consumer: StreamConsumer<RouterConsumerContext>,
     router: Arc<Router>,
     max_payload_bytes: usize,
     commit_invalid_messages: bool,
@@ -52,7 +79,12 @@ impl KafkaIngestor {
             .set("enable.auto.offset.store", "false")
             .set("auto.offset.reset", &config.auto_offset_reset);
 
-        let consumer: StreamConsumer = client.create().map_err(KafkaIngestError::Create)?;
+        let context = RouterConsumerContext {
+            metrics: Arc::clone(router.metrics()),
+        };
+        let consumer: StreamConsumer<RouterConsumerContext> = client
+            .create_with_context(context)
+            .map_err(KafkaIngestError::Create)?;
         let topics: Vec<&str> = config.topics.iter().map(String::as_str).collect();
         consumer
             .subscribe(&topics)
@@ -98,6 +130,7 @@ impl KafkaIngestor {
                                         "Kafka message routed"
                                     );
                                     if let Err(commit_error) = self.consumer.commit_message(&record, CommitMode::Async) {
+                                        self.router.metrics().record_kafka_commit_error();
                                         error!(error = %commit_error, %message_id, "failed to enqueue Kafka offset commit");
                                     }
                                 }
@@ -112,8 +145,17 @@ impl KafkaIngestor {
                                     );
                                     if self.commit_invalid_messages {
                                         if let Err(commit_error) = self.consumer.commit_message(&record, CommitMode::Async) {
+                                            self.router.metrics().record_kafka_commit_error();
                                             error!(error = %commit_error, "failed to commit invalid Kafka message");
                                         }
+                                    } else {
+                                        warn!(
+                                            topic = record.topic(),
+                                            partition = record.partition(),
+                                            offset = record.offset(),
+                                            "stopping Kafka consumer so a later commit cannot skip an invalid record"
+                                        );
+                                        break;
                                     }
                                 }
                             }

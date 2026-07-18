@@ -7,6 +7,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub struct Metrics {
     kafka_messages: AtomicU64,
     kafka_bytes: AtomicU64,
+    kafka_commit_errors: AtomicU64,
+    kafka_rebalance_assignments: AtomicU64,
+    kafka_rebalance_revocations: AtomicU64,
+    kafka_rebalance_errors: AtomicU64,
     valid_messages: AtomicU64,
     invalid_messages: AtomicU64,
     matched_subscriptions: AtomicU64,
@@ -29,6 +33,28 @@ impl Metrics {
     pub fn record_kafka_message(&self, bytes: usize) {
         self.kafka_messages.fetch_add(1, Ordering::Relaxed);
         self.kafka_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    /// Records a failed Kafka offset commit request or callback.
+    pub fn record_kafka_commit_error(&self) {
+        self.kafka_commit_errors.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a Kafka consumer partition assignment callback.
+    pub fn record_kafka_rebalance_assignment(&self) {
+        self.kafka_rebalance_assignments
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a Kafka consumer partition revocation callback.
+    pub fn record_kafka_rebalance_revocation(&self) {
+        self.kafka_rebalance_revocations
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a Kafka consumer rebalance error callback.
+    pub fn record_kafka_rebalance_error(&self) {
+        self.kafka_rebalance_errors.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Records a decoded and validated message.
@@ -96,6 +122,10 @@ impl Metrics {
         MetricsSnapshot {
             kafka_messages: self.kafka_messages.load(Ordering::Relaxed),
             kafka_bytes: self.kafka_bytes.load(Ordering::Relaxed),
+            kafka_commit_errors: self.kafka_commit_errors.load(Ordering::Relaxed),
+            kafka_rebalance_assignments: self.kafka_rebalance_assignments.load(Ordering::Relaxed),
+            kafka_rebalance_revocations: self.kafka_rebalance_revocations.load(Ordering::Relaxed),
+            kafka_rebalance_errors: self.kafka_rebalance_errors.load(Ordering::Relaxed),
             valid_messages: self.valid_messages.load(Ordering::Relaxed),
             invalid_messages: self.invalid_messages.load(Ordering::Relaxed),
             matched_subscriptions: self.matched_subscriptions.load(Ordering::Relaxed),
@@ -122,6 +152,14 @@ pub struct MetricsSnapshot {
     pub kafka_messages: u64,
     /// Kafka payload bytes observed.
     pub kafka_bytes: u64,
+    /// Failed Kafka offset commit requests and callbacks.
+    pub kafka_commit_errors: u64,
+    /// Kafka consumer partition assignment callbacks.
+    pub kafka_rebalance_assignments: u64,
+    /// Kafka consumer partition revocation callbacks.
+    pub kafka_rebalance_revocations: u64,
+    /// Kafka consumer rebalance error callbacks.
+    pub kafka_rebalance_errors: u64,
     /// Valid decoded messages.
     pub valid_messages: u64,
     /// Invalid decoded messages.
@@ -166,6 +204,12 @@ pub fn render_prometheus(
             "router_kafka_messages_total {}\n",
             "# TYPE router_kafka_bytes_total counter\n",
             "router_kafka_bytes_total {}\n",
+            "# TYPE router_kafka_commit_errors_total counter\n",
+            "router_kafka_commit_errors_total {}\n",
+            "# TYPE router_kafka_rebalances_total counter\n",
+            "router_kafka_rebalances_total{{event=\"assignment\"}} {}\n",
+            "router_kafka_rebalances_total{{event=\"revocation\"}} {}\n",
+            "router_kafka_rebalances_total{{event=\"error\"}} {}\n",
             "# TYPE router_messages_valid_total counter\n",
             "router_messages_valid_total {}\n",
             "# TYPE router_messages_invalid_total counter\n",
@@ -200,6 +244,10 @@ pub fn render_prometheus(
         ),
         metrics.kafka_messages,
         metrics.kafka_bytes,
+        metrics.kafka_commit_errors,
+        metrics.kafka_rebalance_assignments,
+        metrics.kafka_rebalance_revocations,
+        metrics.kafka_rebalance_errors,
         metrics.valid_messages,
         metrics.invalid_messages,
         metrics.unmatched_messages,
@@ -218,4 +266,24 @@ pub fn render_prometheus(
         metrics.webhook_successes,
         metrics.webhook_failures,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{render_prometheus, Metrics};
+
+    #[test]
+    fn renders_kafka_commit_and_rebalance_counters() {
+        let metrics = Metrics::default();
+        metrics.record_kafka_commit_error();
+        metrics.record_kafka_rebalance_assignment();
+        metrics.record_kafka_rebalance_revocation();
+        metrics.record_kafka_rebalance_error();
+
+        let rendered = render_prometheus(metrics.snapshot(), 0, 0);
+        assert!(rendered.contains("router_kafka_commit_errors_total 1\n"));
+        assert!(rendered.contains("router_kafka_rebalances_total{event=\"assignment\"} 1\n"));
+        assert!(rendered.contains("router_kafka_rebalances_total{event=\"revocation\"} 1\n"));
+        assert!(rendered.contains("router_kafka_rebalances_total{event=\"error\"} 1\n"));
+    }
 }

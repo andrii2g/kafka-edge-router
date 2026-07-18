@@ -53,8 +53,17 @@ cargo test --doc --workspace
 python scripts/validate-repo.py
 ```
 
-Integration tests requiring Docker should be clearly marked and run in a separate CI job
-so ordinary unit tests remain fast.
+Run the complete broker-backed Kafka suite with one command:
+
+```bash
+make test-kafka
+```
+
+The command starts the pinned official Kafka image, polls broker readiness, requires the
+integration target to connect, and removes its isolated broker volume afterward. Tests
+create unique topic and group names. Ordinary `cargo test` runs the same target without
+Docker and reports a deliberate skip when `KAFKA_TEST_BROKERS` is unset. CI runs
+`make test-kafka` in a separate Kafka integration job.
 
 ## Test data rules
 

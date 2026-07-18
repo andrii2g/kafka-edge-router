@@ -37,6 +37,23 @@ jobs:
       - name: Documentation tests
         run: cargo test --locked --doc --workspace
 
+  kafka:
+    name: Kafka integration
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
+      - name: Run broker-backed tests
+        run: ./scripts/test-kafka.sh
+      - name: Stop Kafka
+        if: always()
+        run: docker compose down --volumes
+
   repository:
     name: Repository validation
     runs-on: ubuntu-24.04
