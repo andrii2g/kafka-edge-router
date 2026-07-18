@@ -48,8 +48,10 @@ tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "
 tokio-stream = { version = "0.1", features = ["net", "sync"] }
 tokio-tungstenite = "0.29"
 tonic = { version = "0.14", features = ["transport", "router"] }
+tonic-health = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
+tonic-reflection = "0.14"
 tower = "0.5"
 tower-http = { version = "0.7", features = ["catch-panic", "compression-gzip", "cors", "limit", "request-id", "trace"] }
 tracing = "0.1"

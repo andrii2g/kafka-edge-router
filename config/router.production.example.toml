@@ -11,6 +11,13 @@ sse_keep_alive_secs = 15
 ws_max_message_bytes = 65536
 ws_max_frame_bytes = 65536
 ws_max_commands_per_second = 32
+grpc_max_decoding_message_bytes = 4194304
+grpc_max_encoding_message_bytes = 4194304
+grpc_concurrency_limit = 256
+grpc_keep_alive_interval_secs = 30
+grpc_keep_alive_timeout_secs = 10
+grpc_health_enabled = true
+grpc_reflection_enabled = false
 
 [router]
 default_queue_capacity = 512

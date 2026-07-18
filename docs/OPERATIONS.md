@@ -6,7 +6,9 @@
 - `/health/ready`: listeners and components were constructed and the daemon has not begun
   shutdown;
 - `/v1/status`: current connection/subscription cardinality and counters;
-- `/metrics`: Prometheus text exposition.
+- `/metrics`: Prometheus text exposition;
+- `grpc.health.v1.Health`: standard gRPC readiness for `router.v1.KafkaRouter` when
+  `api.grpc_health_enabled` is true.
 
 Current readiness does not actively query Kafka on every request. Alert on consumer
 errors and lag separately. Task 008 adds a configurable Kafka-health readiness policy.

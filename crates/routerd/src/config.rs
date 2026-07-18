@@ -85,8 +85,13 @@ impl AppConfig {
             || self.api.ws_max_message_bytes == 0
             || self.api.ws_max_frame_bytes == 0
             || self.api.ws_max_commands_per_second == 0
+            || self.api.grpc_max_decoding_message_bytes == 0
+            || self.api.grpc_max_encoding_message_bytes == 0
+            || self.api.grpc_concurrency_limit == 0
+            || self.api.grpc_keep_alive_interval_secs == 0
+            || self.api.grpc_keep_alive_timeout_secs == 0
         {
-            bail!("HTTP, SSE, and WebSocket limits must be positive");
+            bail!("HTTP, SSE, WebSocket, and gRPC limits must be positive");
         }
         if self.router.default_queue_capacity == 0
             || self.router.max_queue_capacity == 0
@@ -318,6 +323,24 @@ mod tests {
         oversized_frame.api.ws_max_frame_bytes = 129;
         assert!(oversized_frame.validate_listener_and_limits().is_err());
     }
+    #[test]
+    fn grpc_transport_limits_must_be_positive() {
+        let valid = AppConfig::default();
+        assert!(valid.validate_listener_and_limits().is_ok());
+
+        for clear_limit in [
+            |config: &mut AppConfig| config.api.grpc_max_decoding_message_bytes = 0,
+            |config: &mut AppConfig| config.api.grpc_max_encoding_message_bytes = 0,
+            |config: &mut AppConfig| config.api.grpc_concurrency_limit = 0,
+            |config: &mut AppConfig| config.api.grpc_keep_alive_interval_secs = 0,
+            |config: &mut AppConfig| config.api.grpc_keep_alive_timeout_secs = 0,
+        ] {
+            let mut invalid = valid.clone();
+            clear_limit(&mut invalid);
+            assert!(invalid.validate_listener_and_limits().is_err());
+        }
+    }
+
     #[test]
     fn static_webhook_queue_capacity_respects_core_cap() {
         for (capacity, expected_valid) in [(0, false), (8, true), (9, false)] {

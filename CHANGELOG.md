@@ -12,6 +12,9 @@ All notable changes will be documented here. The project follows Semantic Versio
   limits, rate limiting, oversized input, slow-consumer eviction, cancellation, and reconnect.
 - Added deterministic SSE adapter coverage for framing, escaped multiline JSON, virtual-time
   keep-alives, strict query limits, tenant isolation, slow-consumer eviction, and cleanup.
+- Added generated-client gRPC integration coverage for fixed and bidirectional streams,
+  authentication and tenant denial, invalid commands, duplicate subscriptions, cancellation,
+  bounded slow receivers, publisher availability, standard health, and reflection.
 
 ### Changed
 
@@ -20,6 +23,9 @@ All notable changes will be documented here. The project follows Semantic Versio
 - Kept WebSocket per-message compression disabled pending CPU and retained-memory benchmarks.
 - Made SSE reconnect explicitly live-only: `Last-Event-ID` is parsed but ignored, responses
   advertise replay as unsupported, and proxy buffering/idle-timeout guidance is documented.
+- Added configurable gRPC message-size, per-connection concurrency, load-shedding, and
+  HTTP/2 keepalive limits, centralized RPC authentication, readiness-backed standard health,
+  and locally enabled but production-disabled reflection.
 
 ### Validation
 
