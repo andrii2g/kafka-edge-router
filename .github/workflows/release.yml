@@ -2,16 +2,59 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "v*"
 
 permissions:
-  contents: write
-  packages: write
-  id-token: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
+  gate:
+    name: Release gate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
+      - name: Validate source tag and lockfile
+        run: python scripts/verify-release-tag.py --tag "${GITHUB_REF_NAME}"
+      - name: Workspace gates
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo test --locked --workspace --all-features
+          cargo test --locked --doc --workspace
+          python scripts/validate-repo.py
+      - name: Dependency audit
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit
+      - name: Verify non-root release image
+        run: |
+          docker build --tag kafka-edge-router:release-gate .
+          test "$(docker inspect --format '{{.Config.User}}' kafka-edge-router:release-gate)" = "10001:10001"
+          docker run --rm kafka-edge-router:release-gate --config /etc/router/router.toml --check-config
+
   binaries:
+    name: Binary ${{ matrix.target }}
+    needs: gate
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
@@ -24,36 +67,153 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
       - name: Install native build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
-      - run: cargo build --locked --release --bin routerd --target ${{ matrix.target }}
-      - name: Package
+      - name: Build locked release binary
+        run: cargo build --locked --release --bin routerd --target "${{ matrix.target }}"
+      - name: Package binary
         run: |
-          mkdir -p dist
-          cp target/${{ matrix.target }}/release/routerd dist/routerd-${{ matrix.target }}
-          sha256sum dist/routerd-${{ matrix.target }} > dist/routerd-${{ matrix.target }}.sha256
+          mkdir -p dist/package
+          cp "target/${{ matrix.target }}/release/routerd" dist/package/routerd
+          cp LICENSE README.md dist/package/
+          tar -C dist/package -czf "dist/routerd-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz" .
       - uses: actions/upload-artifact@v7
         with:
-          name: routerd-${{ matrix.target }}
-          path: dist/*
+          name: binary-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
 
   image:
+    name: Signed multi-architecture image
+    needs: gate
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/metadata-action@v5
+        id: metadata
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: type=ref,event=tag
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+      - name: Build and publish manifest
+        id: build
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
           platforms: linux/amd64,linux/arm64
-          provenance: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          provenance: mode=max
           sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Scan immutable image digest
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+      - uses: sigstore/cosign-installer@v4.1.2
+      - name: Sign immutable image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE_NAME}@${DIGEST}"
+      - name: Attest image build provenance
+        uses: actions/attest-build-provenance@v3.0.2
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Record image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p dist
+          printf '%s@%s\n' "${IMAGE_NAME}" "${DIGEST}" > dist/IMAGE-DIGEST
+      - uses: actions/upload-artifact@v7
+        with:
+          name: image-digest
+          path: dist/IMAGE-DIGEST
+          retention-days: 7
+
+  release:
+    name: Publish signed release
+    needs: [binaries, image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: binary-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v7
+        with:
+          name: image-digest
+          path: dist
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          path: ./dist
+          format: spdx-json
+          output-file: ./dist/kafka-edge-router-${{ github.ref_name }}.spdx.json
+          upload-artifact: false
+      - name: Generate checksums and release notes
+        run: |
+          (cd dist && sha256sum routerd-*.tar.gz IMAGE-DIGEST *.spdx.json > SHA256SUMS)
+          python scripts/generate-release-notes.py \
+            --tag "${GITHUB_REF_NAME}" \
+            --output dist/RELEASE_NOTES.md
+      - uses: sigstore/cosign-installer@v4.1.2
+      - name: Sign checksums and SBOM
+        run: |
+          cosign sign-blob --yes --bundle dist/SHA256SUMS.bundle dist/SHA256SUMS
+          cosign sign-blob --yes \
+            --bundle "dist/kafka-edge-router-${GITHUB_REF_NAME}.spdx.json.bundle" \
+            "dist/kafka-edge-router-${GITHUB_REF_NAME}.spdx.json"
+      - name: Attest binary build provenance
+        uses: actions/attest-build-provenance@v3.0.2
+        with:
+          subject-path: dist/routerd-*.tar.gz
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2.6.2
+        with:
+          body_path: dist/RELEASE_NOTES.md
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/routerd-*.tar.gz
+            dist/IMAGE-DIGEST
+            dist/SHA256SUMS
+            dist/SHA256SUMS.bundle
+            dist/*.spdx.json
+            dist/*.spdx.json.bundle

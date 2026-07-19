@@ -5,6 +5,7 @@ metadata:
   namespace: kafka-router
 spec:
   minAvailable: 2
+  unhealthyPodEvictionPolicy: IfHealthyBudget
   selector:
     matchLabels:
       app.kubernetes.io/name: kafka-edge-router

@@ -45,8 +45,9 @@ publish_tenants = ["tenant-a", "tenant-b"]
 
 [kafka.consumer]
 brokers = "kafka-0.kafka:9092,kafka-1.kafka:9092,kafka-2.kafka:9092"
-# Each router pod must use a unique group id in the MVP full-stream topology.
-group_id = "router-REPLACE_NODE_ID"
+# Replace this with a stable unique node identity. Kubernetes uses POD_UID through
+# deploy/kubernetes/router.toml.example instead.
+group_id = "kafka-edge-router-REPLACE_NODE_ID"
 client_id = "kafka-edge-router"
 topics = ["router.input"]
 auto_offset_reset = "latest"

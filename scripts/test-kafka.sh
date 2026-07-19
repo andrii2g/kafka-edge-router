@@ -16,3 +16,7 @@ docker compose up -d kafka
 KAFKA_TEST_BROKERS=localhost:9092 \
 KAFKA_INTEGRATION_REQUIRED=1 \
   cargo test --locked --test kafka_integration -- --test-threads=1
+
+KAFKA_TEST_BROKERS=localhost:9092 \
+KAFKA_INTEGRATION_REQUIRED=1 \
+  cargo test --locked -p router-webhook durable::kafka_tests -- --test-threads=1

@@ -373,21 +373,14 @@ release builds through `--locked`.
 
 A ready-to-paste initial instruction is available in [`CODEX_PROMPT.md`](CODEX_PROMPT.md).
 
-## Known production gaps
+## Known production limits
 
-These are tracked rather than hidden:
-
-
-- no DNS-resolution pinning/revalidation for webhook hosts;
-- volatile webhook retries are not durable across restart; durable mode requires three operator-managed Kafka topics;
-- authentication does not yet validate JWT signatures or JWKS rotation;
-- public listeners do not terminate TLS themselves;
-- no Kafka consumer-lag exporter integration;
-- no histogram implementation for route and dispatch latency;
-- no cluster peer-forwarding mode;
-- no durable client acknowledgement/resume protocol;
-- no completed high-cardinality load benchmark.
-
+- Live WS, SSE, and gRPC delivery is bounded and live-only; there is no durable client acknowledgement or resume protocol.
+- Full-stream replicas intentionally use unique Kafka consumer groups, increasing broker read traffic with replica count.
+- TLS terminates at the validated local proxy in production; `routerd` listeners remain loopback-only.
+- Volatile webhook mode loses pending retries on restart; durable mode requires three operator-managed Kafka topics.
+- Capacity claims require workload-specific benchmark, profile, multi-hour soak, and game-day evidence.
+- Release artifacts are trusted only after checksum, signature, provenance, SBOM, and vulnerability-policy verification.
 ## License
 
 - Apache License, Version 2.0;

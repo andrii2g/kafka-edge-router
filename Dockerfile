@@ -7,6 +7,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock rust-toolchain.toml rustfmt.toml clippy.toml ./
 COPY crates ./crates
+COPY tools ./tools
 RUN cargo build --locked --release --bin routerd
 
 FROM debian:bookworm-slim AS runtime

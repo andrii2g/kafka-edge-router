@@ -1,0 +1,103 @@
+# Release and rollback runbook
+
+## Release boundary
+
+Only an annotated or lightweight source tag matching `vMAJOR.MINOR.PATCH` or
+`vMAJOR.MINOR.PATCH-rc.N` starts the release workflow. The tag base version must match
+`workspace.package.version`, resolve to a committed source revision, retain a valid
+`Cargo.lock`, and have a curated file under `docs/releases/`.
+
+Do not create a tag until the corresponding commit is merged to `main`, all required CI
+and security checks pass, performance evidence has been reviewed, and the game-day owner
+has signed off. Moving or reusing a published tag is prohibited.
+
+## Published artifacts
+
+The workflow publishes:
+
+- locked Linux `x86_64` and `aarch64` binary archives;
+- one GHCR multi-architecture manifest addressed by tag and immutable digest;
+- BuildKit SBOM and provenance attestations attached to the image;
+- a release SPDX JSON SBOM covering downloadable artifacts;
+- `SHA256SUMS` for binaries, image digest record, and release SBOM;
+- keyless Cosign bundles for checksums and the release SBOM;
+- GitHub build-provenance attestations for binaries and the image; and
+- curated notes plus a bounded commit changelog.
+
+The image gate builds from the committed lockfile, verifies UID/GID `10001:10001`, checks
+its default configuration, and rejects fixed HIGH or CRITICAL vulnerabilities under the
+repository policy. Keyless signatures bind artifacts to the GitHub Actions OIDC identity;
+no long-lived signing key is stored in repository secrets.
+
+## Verification
+
+```bash
+gh release download v0.1.0-rc.1 --dir dist/v0.1.0-rc.1
+cd dist/v0.1.0-rc.1
+sha256sum --check SHA256SUMS
+cosign verify-blob --bundle SHA256SUMS.bundle SHA256SUMS
+cosign verify-blob \
+  --bundle kafka-edge-router-v0.1.0-rc.1.spdx.json.bundle \
+  kafka-edge-router-v0.1.0-rc.1.spdx.json
+IMAGE="$(cat IMAGE-DIGEST)"
+cosign verify \
+  --certificate-identity-regexp '^https://github.com/andrii2g/kafka-edge-router/.github/workflows/release.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "$IMAGE"
+gh attestation verify routerd-v0.1.0-rc.1-x86_64-unknown-linux-gnu.tar.gz \
+  --repo andrii2g/kafka-edge-router
+```
+
+Extract and execute `routerd --check-config` before deployment. Deploy the immutable image
+digest from `IMAGE-DIGEST`, not a mutable tag.
+
+## Kubernetes rollout
+
+1. Create `kafka-edge-router-config`, `kafka-edge-router-identity`, and
+   `kafka-edge-router-tls` Secrets through the cluster secret-management system.
+2. Render the selected Kustomize overlay and review image digest, namespace, network
+   selectors, resources, Kafka endpoints, and issuer/audience.
+3. Apply with server-side field management and wait for rollout completion.
+4. Confirm every pod resolves a distinct Kafka group id ending in its `POD_UID`.
+5. Check readiness, consumer lag, reconnect rate, queue-full outcomes, webhook retries,
+   memory, and p99 latency through one full traffic cycle.
+
+## Rollback
+
+Select a previously verified release digest. Run:
+
+```bash
+KAFKA_EDGE_ROUTER_IMAGE=ghcr.io/andrii2g/kafka-edge-router \
+  ./scripts/rollback-kubernetes.sh \
+  "$KUBECONFIG" kafka-router sha256:REPLACE_WITH_64_HEX
+```
+
+The script rejects tags and malformed digests, updates only the `router` container, waits
+for the rollout, and reads the deployed image back for equality. Configuration and
+protobuf compatibility must be checked before rollback; an old binary cannot consume a
+configuration containing unknown mandatory behavior.
+
+Abort and investigate when readiness does not recover within ten minutes, Kafka lag grows
+continuously, tenant-denial counters change unexpectedly, or the old image cannot parse the
+current configuration. Do not bypass the PDB or force-delete healthy pods merely to make a
+rollout progress.
+
+## Game day
+
+Record every command, UTC timestamp, source commit, image digest, cluster version, node
+shape, Kafka topology, dashboard link, expected outcome, actual outcome, and follow-up.
+The release candidate game day must cover:
+
+1. one slow WS/SSE/gRPC reader and bounded eviction;
+2. retryable and terminal webhook receiver failures;
+3. a Kafka consumer rebalance;
+4. one router process crash before and after offset commit windows;
+5. a rolling restart while clients reconnect;
+6. an invalid JWT and cross-tenant subscription attempt;
+7. network denial of a private webhook target;
+8. rollback from the candidate digest to the previous verified digest; and
+9. recovery validation with stable message-id deduplication.
+
+A short smoke run may validate tooling, but it does not satisfy the multi-hour soak or
+release-candidate game-day gates. Open findings remain release blockers unless explicitly
+accepted as documented known limits by the release owner.

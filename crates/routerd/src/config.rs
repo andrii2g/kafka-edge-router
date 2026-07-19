@@ -60,11 +60,41 @@ impl AppConfig {
             )
             .build()
             .with_context(|| format!("failed to load configuration from {}", path.display()))?;
-        let configuration: Self = value
+        let mut configuration: Self = value
             .try_deserialize()
             .context("failed to deserialize configuration")?;
+        configuration.apply_runtime_identity(|name| std::env::var(name).ok())?;
         configuration.validate()?;
         Ok(configuration)
+    }
+
+    fn apply_runtime_identity<F>(&mut self, mut lookup: F) -> anyhow::Result<()>
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
+        let Some(variable) = self.kafka.group_id_suffix_env.as_deref() else {
+            return Ok(());
+        };
+        if !valid_environment_name(variable) {
+            bail!("kafka.group_id_suffix_env must be a valid environment variable name");
+        }
+        let suffix = lookup(variable).with_context(|| {
+            format!("environment variable {variable} is required for the Kafka group id")
+        })?;
+        if suffix.is_empty()
+            || suffix.len() > 128
+            || !suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            bail!("Kafka group-id suffix from {variable} must be 1..=128 ASCII letters, digits, '.', '_', or '-'");
+        }
+        let group_id = format!("{}.{}", self.kafka.consumer.group_id, suffix);
+        if group_id.len() > 255 {
+            bail!("resolved Kafka consumer group id must not exceed 255 bytes");
+        }
+        self.kafka.consumer.group_id = group_id;
+        Ok(())
     }
 
     fn validate(&self) -> anyhow::Result<()> {
@@ -159,10 +189,14 @@ impl AppConfig {
             bail!("kafka.consumer.max_payload_bytes must be positive");
         }
         if self.kafka.consumer.brokers.trim().is_empty()
-            || self.kafka.consumer.group_id.trim().is_empty()
             || self.kafka.consumer.client_id.trim().is_empty()
         {
-            bail!("Kafka consumer brokers, group_id, and client_id must not be empty");
+            bail!("Kafka consumer brokers and client_id must not be empty");
+        }
+        if !valid_kafka_group_id(&self.kafka.consumer.group_id) {
+            bail!(
+                "kafka.consumer.group_id must be 1..=255 ASCII letters, digits, '.', '_', or '-'"
+            );
         }
         if self
             .kafka
@@ -375,10 +409,26 @@ pub enum SecurityMode {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct KafkaConfig {
+    /// Optional environment variable appended to the consumer group id at startup.
+    pub group_id_suffix_env: Option<String>,
     /// Mandatory consumer.
     pub consumer: KafkaConsumerConfig,
     /// Optional producer selected with `enabled`.
     pub producer: KafkaProducerConfig,
+}
+
+fn valid_environment_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    matches!(bytes.next(), Some(byte) if byte.is_ascii_alphabetic() || byte == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn valid_kafka_group_id(group_id: &str) -> bool {
+    !group_id.is_empty()
+        && group_id.len() <= 255
+        && group_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 /// Structured logging configuration.
@@ -634,5 +684,45 @@ mod tests {
         config.server.http_addr = "127.0.0.1:8080".to_owned();
         config.server.grpc_addr = "127.0.0.1:9090".to_owned();
         assert!(config.validate_listener_and_limits().is_ok());
+    }
+
+    #[test]
+    fn kafka_group_id_is_bounded_and_portable() {
+        let mut config = AppConfig::default();
+        config.kafka.consumer.group_id = "router/group".to_owned();
+        assert!(config.validate_kafka_and_auth().is_err());
+
+        config.kafka.consumer.group_id = "r".repeat(256);
+        assert!(config.validate_kafka_and_auth().is_err());
+
+        config.kafka.consumer.group_id = "router.prod_1".to_owned();
+        assert!(config.validate_kafka_and_auth().is_ok());
+    }
+
+    #[test]
+    fn runtime_group_suffix_is_required_bounded_and_appended_once() {
+        let mut valid = AppConfig::default();
+        valid.kafka.consumer.group_id = "router".to_owned();
+        valid.kafka.group_id_suffix_env = Some("POD_UID".to_owned());
+        valid
+            .apply_runtime_identity(|name| (name == "POD_UID").then(|| "pod-123".to_owned()))
+            .expect("valid pod identity");
+        assert_eq!(valid.kafka.consumer.group_id, "router.pod-123");
+
+        let mut missing = AppConfig::default();
+        missing.kafka.group_id_suffix_env = Some("POD_UID".to_owned());
+        assert!(missing.apply_runtime_identity(|_| None).is_err());
+
+        let mut invalid_name = AppConfig::default();
+        invalid_name.kafka.group_id_suffix_env = Some("POD-UID".to_owned());
+        assert!(invalid_name
+            .apply_runtime_identity(|_| Some("pod".to_owned()))
+            .is_err());
+
+        let mut invalid_suffix = AppConfig::default();
+        invalid_suffix.kafka.group_id_suffix_env = Some("POD_UID".to_owned());
+        assert!(invalid_suffix
+            .apply_runtime_identity(|_| Some("pod/123".to_owned()))
+            .is_err());
     }
 }

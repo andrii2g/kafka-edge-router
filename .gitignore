@@ -10,3 +10,4 @@ coverage/
 *.profdata
 .vs/
 .codex/
+/artifacts/

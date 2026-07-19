@@ -1,0 +1,170 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-edge-router
+  namespace: kafka-router
+  labels:
+    app.kubernetes.io/name: kafka-edge-router
+    app.kubernetes.io/version: 0.1.0-rc.1
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 600
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka-edge-router
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka-edge-router
+        app.kubernetes.io/version: 0.1.0-rc.1
+    spec:
+      terminationGracePeriodSeconds: 40
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: router
+          image: ghcr.io/andrii2g/kafka-edge-router:v0.1.0-rc.1
+          imagePullPolicy: Always
+          args: ["--config", "/etc/router/router.toml"]
+          env:
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: RUST_LOG
+              value: routerd=info,router_core=info,router_kafka=info,router_api=info,router_webhook=info
+          ports:
+            - name: backend-http
+              containerPort: 8080
+            - name: backend-grpc
+              containerPort: 9090
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: router-config
+              mountPath: /etc/router
+              readOnly: true
+            - name: router-identity
+              mountPath: /var/run/router-identity
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+        - name: tls-proxy
+          image: envoyproxy/envoy:distroless-v1.38.0
+          imagePullPolicy: IfNotPresent
+          args: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warning"]
+          ports:
+            - name: tls-http
+              containerPort: 8443
+            - name: tls-grpc
+              containerPort: 9443
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /health/ready
+              port: tls-http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /health/live
+              port: tls-http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /health/live
+              port: tls-http
+            periodSeconds: 2
+            failureThreshold: 45
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            runAsUser: 101
+            runAsGroup: 101
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: proxy-config
+              mountPath: /etc/envoy
+              readOnly: true
+            - name: router-tls
+              mountPath: /var/run/router-tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: router-config
+          secret:
+            secretName: kafka-edge-router-config
+            defaultMode: 0440
+        - name: router-identity
+          secret:
+            secretName: kafka-edge-router-identity
+            defaultMode: 0440
+        - name: proxy-config
+          configMap:
+            name: kafka-edge-router-proxy
+        - name: router-tls
+          secret:
+            secretName: kafka-edge-router-tls
+            defaultMode: 0440
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: kafka-edge-router
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka-edge-router
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka-edge-router

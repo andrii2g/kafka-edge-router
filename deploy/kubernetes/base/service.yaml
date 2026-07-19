@@ -6,12 +6,15 @@ metadata:
   labels:
     app.kubernetes.io/name: kafka-edge-router
 spec:
+  type: ClusterIP
   selector:
     app.kubernetes.io/name: kafka-edge-router
   ports:
-    - name: http
-      port: 8080
-      targetPort: http
-    - name: grpc
-      port: 9090
-      targetPort: grpc
+    - name: https
+      port: 443
+      targetPort: tls-http
+      appProtocol: https
+    - name: grpcs
+      port: 9443
+      targetPort: tls-grpc
+      appProtocol: https

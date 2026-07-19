@@ -90,20 +90,15 @@ Alert thresholds require workload baselines; do not copy arbitrary static values
 
 ### Kubernetes
 
-Files in `deploy/kubernetes` provide:
+`deploy/kubernetes/base` provides a production-oriented Deployment, TLS proxy, Service,
+PodDisruptionBudget, HorizontalPodAutoscaler, NetworkPolicy, resources, probes, and topology
+constraints. `deploy/kubernetes/overlays/rc` selects the release-candidate namespace and
+image. Render and server-side dry-run the overlay before applying it.
 
-- ConfigMap with non-secret local-style configuration;
-- Secret placeholder;
-- Deployment with probes, resources, security context, and topology spread;
-- ClusterIP Service;
-- PodDisruptionBudget; and
-- optional HorizontalPodAutoscaler.
-
-For full-stream mode, derive a unique Kafka group id from pod identity. A plain Deployment
-with an environment-only group id would accidentally make pods share a group. The
-example uses the pod name through the Downward API and documents a required config
-rendering step; task 010 makes this production-grade with a startup templater or native
-`group_id_suffix` setting.
+The Deployment injects immutable `POD_UID`; `kafka.group_id_suffix_env = "POD_UID"` makes
+startup resolve a unique full-stream consumer group for every replica. Configuration, JWKS,
+and TLS material are separate externally managed Secrets and are never committed. See
+`deploy/kubernetes/README.md` and `docs/RELEASE.md` for rollout and rollback gates.
 
 ### SSE reverse proxies
 
@@ -134,8 +129,8 @@ and sends SIGTERM. Install configuration under `/etc/kafka-edge-router/router.to
 
 ### Container
 
-The Dockerfile uses a Rust build stage and a slim non-root runtime. Generate and commit
-The committed `Cargo.lock` is enforced with `--locked` for reproducible builds.
+The Dockerfile uses a Rust build stage and a slim non-root runtime. The committed
+`Cargo.lock` is enforced with `--locked` for reproducible builds.
 
 ## Rolling upgrades
 
@@ -169,7 +164,7 @@ The committed `Cargo.lock` is enforced with `--locked` for reproducible builds.
 1. Check status distribution in logs and attempt/success/failure counters.
 2. Confirm DNS, certificates, egress policy, and destination rate limits.
 3. Verify the receiver honors idempotency keys.
-4. Remember current retries are volatile across restart.
+4. Identify the configured delivery mode; volatile retries can be lost on restart, while durable mode recovery depends on its Kafka topics.
 
 ### Kafka unavailable
 

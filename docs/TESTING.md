@@ -38,9 +38,9 @@ change as expected.
 
 ### Load and soak tests
 
-Task 010 supplies a reproducible load generator. A soak should include connection churn,
-slow consumers, webhook failures, Kafka rebalances, and rolling router restarts while
-monitoring memory growth.
+`router-load` supplies bounded WS, SSE, gRPC, and webhook measurements. Run
+`scripts/soak-test.sh` with connection churn, slow consumers, webhook failures, Kafka
+rebalances, and rolling router restarts while retaining resource and correctness reports.
 
 ## Commands
 
@@ -60,8 +60,9 @@ make test-kafka
 ```
 
 The command starts the pinned official Kafka image, polls broker readiness, requires the
-integration target to connect, and removes its isolated broker volume afterward. Tests
-create unique topic and group names. Ordinary `cargo test` runs the same target without
+integration targets to connect, and removes its isolated broker volume afterward. It runs
+both the Kafka ordering/commit/rebalance suite and durable-webhook restart/crash recovery.
+Tests create unique topic and group names. Ordinary `cargo test` runs these tests without
 Docker and reports a deliberate skip when `KAFKA_TEST_BROKERS` is unset. CI runs
 `make test-kafka` in a separate Kafka integration job.
 
