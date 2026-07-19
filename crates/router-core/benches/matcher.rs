@@ -17,30 +17,34 @@ fn metadata(dimensions: usize) -> RoutingMetadata {
         message_type: None,
         channel: None,
         actor_id: None,
-        audience_type: None,
-        audience_id: None,
+        recipient_type: None,
+        recipient_identity: None,
         content_type: Arc::from("application/octet-stream"),
         timestamp_ms: None,
         source: None,
     };
-    if dimensions >= 2 {
+    if dimensions >= 1 {
         metadata.kind = Some(Arc::from("content"));
+    }
+    if dimensions >= 2 {
         metadata.channel = Some(Arc::from("news"));
     }
-    if dimensions >= 4 {
+    if dimensions >= 3 {
         metadata.message_type = Some(Arc::from("broadcast"));
+    }
+    if dimensions >= 4 {
         metadata.actor_id = Some(Arc::from("actor-1"));
     }
-    if dimensions >= 6 {
-        metadata.audience_type = Some(Arc::from("team"));
-        metadata.audience_id = Some(Arc::from("team-7"));
+    if dimensions >= 5 {
+        metadata.recipient_type = Some(Arc::from("team"));
+        metadata.recipient_identity = Some(Arc::from("team-7"));
     }
     metadata
 }
 
 fn message(payload_size: usize) -> Arc<RoutedMessage> {
     Arc::new(
-        RoutedMessage::new(metadata(6), Bytes::from(vec![0x5a; payload_size]))
+        RoutedMessage::new(metadata(5), Bytes::from(vec![0x5a; payload_size]))
             .expect("benchmark message is valid"),
     )
 }
@@ -52,8 +56,8 @@ fn wildcard_filter() -> RouteFilter {
         message_type: None,
         channel: None,
         actor_id: None,
-        audience_type: None,
-        audience_id: None,
+        recipient_type: None,
+        recipient_identity: None,
     }
 }
 
@@ -72,7 +76,7 @@ fn benchmark_config(queue_capacity: usize, subscriptions: usize) -> RouterConfig
 
 fn candidate_generation(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("candidate_generation");
-    for dimensions in [0_usize, 2, 4, 6] {
+    for dimensions in 0_usize..=5 {
         let metadata = metadata(dimensions);
         group.bench_with_input(
             BenchmarkId::from_parameter(dimensions),

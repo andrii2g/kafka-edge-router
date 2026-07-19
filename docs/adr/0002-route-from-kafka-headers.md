@@ -13,7 +13,7 @@ Large or adversarial payloads would directly affect matcher latency.
 
 The producer places the routing plane in bounded UTF-8 Kafka headers. The router treats
 the payload as opaque bytes until a protocol adapter encodes it for a destination.
-Subscriptions support exact values and wildcards over six optional dimensions.
+Subscriptions support exact values and wildcards over five optional logical dimensions.
 
 ## Consequences
 

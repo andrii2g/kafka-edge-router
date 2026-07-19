@@ -11,6 +11,45 @@ Do not create a tag until the corresponding commit is merged to `main`, all requ
 and security checks pass, performance evidence has been reviewed, and the game-day owner
 has signed off. Moving or reusing a published tag is prohibited.
 
+## Release qualification checklist
+
+The release owner must retain command output, reports, image digests, and sign-off links
+under `docs/release-evidence/<version>/` or in an immutable external evidence system.
+
+### Before tagging
+
+- [ ] The candidate commit is merged to `main` and the worktree is clean.
+- [ ] Required CI, Kafka integration, dependency audit, secret scan, container build, and
+  vulnerability-policy checks pass for that commit.
+- [ ] Matcher and end-to-end scenarios are rerun with complete hardware, configuration,
+  payload, fan-out, topology, and source metadata.
+- [ ] CPU, allocation, lock-contention, and memory-retention profiles are reviewed with no
+  unexplained hotspot or unbounded growth.
+- [ ] A multi-hour K3s soak covers connection churn, slow readers, webhook failures, Kafka
+  rebalances, and rolling restarts without unexplained RSS, queue, subscription, or lag
+  growth.
+- [ ] The candidate image runs as UID/GID `10001:10001`, passes configuration validation,
+  and satisfies the fixed HIGH/CRITICAL vulnerability policy.
+- [ ] The Kubernetes overlay passes server-side validation with production-equivalent
+  Secrets, Kafka connectivity, observability, resources, and disruption settings.
+- [ ] The release-candidate game day completes every scenario below, including rollback,
+  and all blocking findings are resolved.
+
+### After the tag workflow
+
+- [ ] Binary archives and the multi-architecture image are published from the exact source
+  tag and committed lockfile.
+- [ ] Checksums, SBOM, provenance attestations, and keyless signatures verify with the
+  commands in this runbook.
+- [ ] The immutable image digest is deployed to the candidate environment and recovery,
+  readiness, lag, latency, and tenant-isolation checks pass.
+- [ ] Release notes and the changelog identify the shipped version and retain only
+  user-relevant changes and explicit operating boundaries.
+
+A failed or missing item blocks release promotion. A short local smoke run can support a
+checklist item but cannot replace the required K3s soak, profiles, rollback exercise, or
+game day.
+
 ## Published artifacts
 
 The workflow publishes:
@@ -100,4 +139,4 @@ The release candidate game day must cover:
 
 A short smoke run may validate tooling, but it does not satisfy the multi-hour soak or
 release-candidate game-day gates. Open findings remain release blockers unless explicitly
-accepted as documented known limits by the release owner.
+accepted as documented operating boundaries by the release owner.

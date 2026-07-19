@@ -1,7 +1,8 @@
 # Contributing
 
-Select one item from `tasks/` or open an issue that defines the problem, resource bounds,
-failure semantics, and compatibility impact. Read `AGENTS.md` before changing code.
+Start from an issue or a clearly defined change request that describes the problem,
+resource bounds, failure semantics, compatibility impact, and acceptance criteria. Read
+`AGENTS.md` before changing code.
 
 ## Development
 

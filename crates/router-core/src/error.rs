@@ -42,9 +42,9 @@ pub enum CoreError {
         /// Process-wide maximum queue slots per connection.
         maximum: usize,
     },
-    /// Both audience fields must be present together.
-    #[error("audience_type and audience_id must either both be set or both be absent")]
-    IncompleteAudience,
+    /// Both recipient fields must be present together.
+    #[error("recipient_type and recipient_identity must either both be set or both be absent")]
+    IncompleteRecipient,
     /// A mandatory routing field is absent.
     #[error("missing mandatory routing field: {0}")]
     MissingField(&'static str),

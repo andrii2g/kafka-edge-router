@@ -15,8 +15,8 @@ message RouteFilter {
   optional string type = 3;
   optional string channel = 4;
   optional string actor_id = 5;
-  optional string audience_type = 6;
-  optional string audience_id = 7;
+  optional string recipient_type = 6;
+  optional string recipient_identity = 7;
 }
 
 message SubscribeRequest {
@@ -73,8 +73,8 @@ message RoutingMetadata {
   optional string type = 4;
   optional string channel = 5;
   optional string actor_id = 6;
-  optional string audience_type = 7;
-  optional string audience_id = 8;
+  optional string recipient_type = 7;
+  optional string recipient_identity = 8;
   string content_type = 9;
   optional int64 timestamp_ms = 10;
   KafkaPosition source = 11;
@@ -106,8 +106,8 @@ message PublishRequest {
   optional string type = 4;
   optional string channel = 5;
   optional string actor_id = 6;
-  optional string audience_type = 7;
-  optional string audience_id = 8;
+  optional string recipient_type = 7;
+  optional string recipient_identity = 8;
   string content_type = 9;
   bytes payload = 10;
   optional string ordering_key = 11;

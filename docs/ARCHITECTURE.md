@@ -94,7 +94,7 @@ handling, and component supervision. Business rules do not belong here.
 2. The ingestor records Kafka byte counters.
 3. The decoder rejects an oversized payload before copying it.
 4. Routing headers are located and decoded as UTF-8.
-5. Core metadata validation enforces mandatory tenant, identifier limits, and audience
+5. Core metadata validation enforces mandatory tenant, identifier limits, and recipient
    pairing.
 6. The payload is copied once into `Bytes`; metadata and payload become a
    `RoutedMessage`.
@@ -120,8 +120,8 @@ kind            optional exact or wildcard
 type            optional exact or wildcard
 channel         optional exact or wildcard
 actor_id        optional exact or wildcard
-audience_type   optional exact or wildcard
-audience_id     optional exact or wildcard
+recipient_type + recipient_identity
+                optional exact pair or wildcard
 ```
 
 The route index maps a fully compiled `RouteKey` to:
@@ -131,8 +131,9 @@ connection_id -> [subscription_id, ...]
 ```
 
 For each populated optional message dimension, candidate generation branches into its
-exact value and wildcard `None`. A fully populated message creates 64 candidates. A
-message with only `kind` and `channel` creates four candidates. Tenant never branches.
+exact value and wildcard `None`. The recipient pair branches atomically as one dimension.
+A fully populated message creates 32 candidates. A message with only `kind` and `channel`
+creates four candidates. Tenant never branches.
 
 This design makes matching proportional to candidate count plus actual matches. It does
 not iterate through unrelated subscriptions.
@@ -146,8 +147,8 @@ validation, hash-map updates, match collection, sender cloning/state updates, or
 Registration and unregistration paths must remain idempotent. Protocol adapters use an
 RAII guard so cancellation or an early socket error removes subscriptions.
 
-Task 001 proves subscription/unsubscription races and route-bucket cleanup with
-barrier-coordinated tests. One process-wide mutation mutex establishes a total order for
+Barrier-coordinated concurrency tests prove subscription/unsubscription races and
+route-bucket cleanup. One process-wide mutation mutex establishes a total order for
 subscribe, unsubscribe, and unregister operations. Empty-bucket cleanup runs before that
 mutex is released, so another mutation cannot repopulate a key between the emptiness check
 and removal. Dispatch does not take the mutation mutex: a dispatch that collected a match
@@ -205,12 +206,12 @@ Possible future policies should be explicit per subscription:
 
 ## Routing benchmarks
 
-Task 001 provides Criterion coverage for fully populated candidate generation, unmatched
-dispatch, and accepted fan-out to 1, 32, and 256 bounded receivers. Run and save a named
+The matcher benchmark provides Criterion coverage for fully populated candidate generation,
+unmatched dispatch, and accepted fan-out to 1, 32, and 256 bounded receivers. Run and save a named
 baseline with:
 
 ```bash
-cargo bench -p router-core --bench matcher -- --save-baseline task-001
+cargo bench --locked -p router-core --bench matcher -- --save-baseline release-0.1
 ```
 
 Record benchmark results with enough context to compare runs:
@@ -226,7 +227,7 @@ profile: bench
 benchmark: <Criterion benchmark id>
 time: <lower, estimate, upper with units>
 throughput: <lower, estimate, upper elements/second when reported>
-baseline: task-001
+baseline: release-0.1
 ```
 
 Criterion writes detailed estimates below `target/criterion`; generated benchmark output

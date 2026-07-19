@@ -234,7 +234,12 @@ async fn websocket_validation_error_codes_are_stable() {
         ("", json!({}), "invalid_subscription_id"),
         (
             "invalid-filter",
-            json!({ "audience_type": "team" }),
+            json!({ "recipient_type": "team" }),
+            "invalid_filter",
+        ),
+        (
+            "unknown-recipient-filter",
+            json!({ "recipient_category": "team", "recipient_key": "team-7" }),
             "invalid_filter",
         ),
         (
@@ -370,8 +375,8 @@ async fn websocket_queue_saturation_closes_slow_consumer_without_blocking_dispat
                 message_type: None,
                 channel: None,
                 actor_id: None,
-                audience_type: None,
-                audience_id: None,
+                recipient_type: None,
+                recipient_identity: None,
                 content_type: Arc::from("application/octet-stream"),
                 timestamp_ms: None,
                 source: None,

@@ -469,8 +469,8 @@ mod tests {
             message_type: None,
             channel: channel.map(Arc::from),
             actor_id: None,
-            audience_type: None,
-            audience_id: None,
+            recipient_type: None,
+            recipient_identity: None,
         }
     }
 
@@ -484,8 +484,8 @@ mod tests {
                     message_type: None,
                     channel: Some(Arc::from(channel)),
                     actor_id: None,
-                    audience_type: None,
-                    audience_id: None,
+                    recipient_type: None,
+                    recipient_identity: None,
                     content_type: Arc::from("application/json"),
                     timestamp_ms: None,
                     source: None,

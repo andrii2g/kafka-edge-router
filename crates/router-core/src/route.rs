@@ -9,6 +9,7 @@ use crate::{ids::validate_identifier, CoreError, RoutingMetadata};
 
 /// A tenant-scoped subscription. `None` on an optional dimension means wildcard.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RouteFilter {
     /// Mandatory tenant boundary.
     pub tenant_id: Arc<str>,
@@ -24,12 +25,12 @@ pub struct RouteFilter {
     /// Optional exact actor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_id: Option<Arc<str>>,
-    /// Optional exact audience category.
+    /// Optional exact recipient category, paired with `recipient_identity`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audience_type: Option<Arc<str>>,
-    /// Optional exact audience id.
+    pub recipient_type: Option<Arc<str>>,
+    /// Optional exact recipient identity, paired with `recipient_type`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audience_id: Option<Arc<str>>,
+    pub recipient_identity: Option<Arc<str>>,
 }
 
 impl RouteFilter {
@@ -41,15 +42,15 @@ impl RouteFilter {
             ("type", self.message_type.as_deref()),
             ("channel", self.channel.as_deref()),
             ("actor_id", self.actor_id.as_deref()),
-            ("audience_type", self.audience_type.as_deref()),
-            ("audience_id", self.audience_id.as_deref()),
+            ("recipient_type", self.recipient_type.as_deref()),
+            ("recipient_identity", self.recipient_identity.as_deref()),
         ] {
             if let Some(value) = value {
                 validate_identifier(field, value, 256)?;
             }
         }
-        if self.audience_type.is_some() != self.audience_id.is_some() {
-            return Err(CoreError::IncompleteAudience);
+        if self.recipient_type.is_some() != self.recipient_identity.is_some() {
+            return Err(CoreError::IncompleteRecipient);
         }
         Ok(())
     }
@@ -64,16 +65,51 @@ impl RouteFilter {
             )
             && optional_matches(self.channel.as_deref(), metadata.channel.as_deref())
             && optional_matches(self.actor_id.as_deref(), metadata.actor_id.as_deref())
-            && optional_matches(
-                self.audience_type.as_deref(),
-                metadata.audience_type.as_deref(),
+            && recipient_matches(
+                self.recipient_type.as_deref(),
+                self.recipient_identity.as_deref(),
+                metadata.recipient_type.as_deref(),
+                metadata.recipient_identity.as_deref(),
             )
-            && optional_matches(self.audience_id.as_deref(), metadata.audience_id.as_deref())
     }
 }
 
 fn optional_matches(expected: Option<&str>, actual: Option<&str>) -> bool {
     expected.is_none_or(|expected| actual == Some(expected))
+}
+
+fn recipient_matches(
+    expected_type: Option<&str>,
+    expected_identity: Option<&str>,
+    actual_type: Option<&str>,
+    actual_identity: Option<&str>,
+) -> bool {
+    match (expected_type, expected_identity) {
+        (None, None) => true,
+        (Some(expected_type), Some(expected_identity)) => {
+            actual_type == Some(expected_type) && actual_identity == Some(expected_identity)
+        }
+        _ => false,
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct RecipientKey {
+    recipient_type: Arc<str>,
+    recipient_identity: Arc<str>,
+}
+
+fn recipient_key(
+    recipient_type: Option<&Arc<str>>,
+    recipient_identity: Option<&Arc<str>>,
+) -> Option<RecipientKey> {
+    match (recipient_type, recipient_identity) {
+        (Some(recipient_type), Some(recipient_identity)) => Some(RecipientKey {
+            recipient_type: Arc::clone(recipient_type),
+            recipient_identity: Arc::clone(recipient_identity),
+        }),
+        _ => None,
+    }
 }
 
 /// Hash key stored in the compiled subscription index.
@@ -84,8 +120,7 @@ pub struct RouteKey {
     message_type: Option<Arc<str>>,
     channel: Option<Arc<str>>,
     actor_id: Option<Arc<str>>,
-    audience_type: Option<Arc<str>>,
-    audience_id: Option<Arc<str>>,
+    recipient: Option<RecipientKey>,
 }
 
 impl From<&RouteFilter> for RouteKey {
@@ -96,25 +131,29 @@ impl From<&RouteFilter> for RouteKey {
             message_type: filter.message_type.clone(),
             channel: filter.channel.clone(),
             actor_id: filter.actor_id.clone(),
-            audience_type: filter.audience_type.clone(),
-            audience_id: filter.audience_id.clone(),
+            recipient: recipient_key(
+                filter.recipient_type.as_ref(),
+                filter.recipient_identity.as_ref(),
+            ),
         }
     }
 }
 
 impl RouteKey {
-    /// Expands a message into exact/wildcard keys. With six populated optional
-    /// dimensions, this creates exactly 64 direct hash lookups.
-    pub fn candidates(metadata: &RoutingMetadata) -> SmallVec<[Self; 64]> {
-        let mut keys = SmallVec::<[Self; 64]>::new();
+    /// Expands a message into exact/wildcard keys. With five populated optional
+    /// dimensions, this creates exactly 32 direct hash lookups.
+    pub fn candidates(metadata: &RoutingMetadata) -> SmallVec<[Self; 32]> {
+        let mut keys = SmallVec::<[Self; 32]>::new();
         keys.push(Self {
             tenant_id: Arc::clone(&metadata.tenant_id),
             kind: metadata.kind.clone(),
             message_type: metadata.message_type.clone(),
             channel: metadata.channel.clone(),
             actor_id: metadata.actor_id.clone(),
-            audience_type: metadata.audience_type.clone(),
-            audience_id: metadata.audience_id.clone(),
+            recipient: recipient_key(
+                metadata.recipient_type.as_ref(),
+                metadata.recipient_identity.as_ref(),
+            ),
         });
 
         macro_rules! branch_wildcard {
@@ -134,8 +173,7 @@ impl RouteKey {
         branch_wildcard!(message_type, metadata.message_type.is_some());
         branch_wildcard!(channel, metadata.channel.is_some());
         branch_wildcard!(actor_id, metadata.actor_id.is_some());
-        branch_wildcard!(audience_type, metadata.audience_type.is_some());
-        branch_wildcard!(audience_id, metadata.audience_id.is_some());
+        branch_wildcard!(recipient, metadata.recipient_type.is_some());
         keys
     }
 }
@@ -147,13 +185,22 @@ mod tests {
     use super::{RouteFilter, RouteKey};
     use crate::RoutingMetadata;
 
-    const OPTIONAL_DIMENSIONS: u32 = 6;
+    const OPTIONAL_DIMENSIONS: u32 = 5;
 
     fn optional(mask: u32, bit: u32, value: &'static str) -> Option<Arc<str>> {
         (mask & (1 << bit) != 0).then(|| Arc::from(value))
     }
 
+    fn recipient(mask: u32, bit: u32) -> (Option<Arc<str>>, Option<Arc<str>>) {
+        if mask & (1 << bit) != 0 {
+            (Some(Arc::from("team")), Some(Arc::from("team-7")))
+        } else {
+            (None, None)
+        }
+    }
+
     fn metadata_for_mask(mask: u32, tenant: &str) -> RoutingMetadata {
+        let (recipient_type, recipient_identity) = recipient(mask, 4);
         RoutingMetadata {
             message_id: Arc::from("m-1"),
             tenant_id: Arc::from(tenant),
@@ -161,8 +208,8 @@ mod tests {
             message_type: optional(mask, 1, "broadcast"),
             channel: optional(mask, 2, "news"),
             actor_id: optional(mask, 3, "u-1"),
-            audience_type: optional(mask, 4, "team"),
-            audience_id: optional(mask, 5, "team-7"),
+            recipient_type,
+            recipient_identity,
             content_type: Arc::from("application/json"),
             timestamp_ms: None,
             source: None,
@@ -170,14 +217,15 @@ mod tests {
     }
 
     fn filter_for_mask(mask: u32, tenant: &str) -> RouteFilter {
+        let (recipient_type, recipient_identity) = recipient(mask, 4);
         RouteFilter {
             tenant_id: Arc::from(tenant),
             kind: optional(mask, 0, "content"),
             message_type: optional(mask, 1, "broadcast"),
             channel: optional(mask, 2, "news"),
             actor_id: optional(mask, 3, "u-1"),
-            audience_type: optional(mask, 4, "team"),
-            audience_id: optional(mask, 5, "team-7"),
+            recipient_type,
+            recipient_identity,
         }
     }
 
@@ -205,7 +253,7 @@ mod tests {
                 assert_eq!(
                     indexed,
                     filter.matches(&metadata),
-                    "message mask {message_mask:06b}, filter mask {filter_mask:06b}"
+                    "message mask {message_mask:05b}, filter mask {filter_mask:05b}"
                 );
             }
         }
@@ -218,22 +266,39 @@ mod tests {
             let candidates = RouteKey::candidates(&metadata);
             let unique: HashSet<_> = candidates.iter().collect();
             assert_eq!(candidates.len(), 1 << mask.count_ones());
-            assert_eq!(unique.len(), candidates.len(), "mask {mask:06b}");
+            assert_eq!(unique.len(), candidates.len(), "mask {mask:05b}");
             assert!(
                 candidates
                     .iter()
                     .all(|candidate| candidate.tenant_id == metadata.tenant_id),
-                "tenant must never branch for mask {mask:06b}"
+                "tenant must never branch for mask {mask:05b}"
             );
         }
+    }
+
+    #[test]
+    fn recipient_types_are_open_exact_values() {
+        let mut metadata = metadata_for_mask(1 << 4, "tenant-a");
+        metadata.recipient_type = Some(Arc::from("superteam"));
+        metadata.recipient_identity = Some(Arc::from("bca321"));
+
+        let mut filter = filter_for_mask(1 << 4, "tenant-a");
+        filter.recipient_type = Some(Arc::from("superteam"));
+        filter.recipient_identity = Some(Arc::from("bca321"));
+        assert!(filter.matches(&metadata));
+        assert!(RouteKey::candidates(&metadata).contains(&RouteKey::from(&filter)));
+
+        filter.recipient_type = Some(Arc::from("team"));
+        assert!(!filter.matches(&metadata));
+        assert!(!RouteKey::candidates(&metadata).contains(&RouteKey::from(&filter)));
     }
 
     #[test]
     fn randomized_index_equivalence_and_tenant_isolation() {
         let mut random = Lcg(0x5eed_cafe_f00d_beef);
         for case in 0..10_000 {
-            let message_mask = (random.next() & 0x3f) as u32;
-            let filter_mask = (random.next() & 0x3f) as u32;
+            let message_mask = (random.next() & 0x1f) as u32;
+            let filter_mask = (random.next() & 0x1f) as u32;
             let same_tenant = random.next() & 1 == 0;
             let metadata = metadata_for_mask(message_mask, "tenant-a");
             let mut filter = filter_for_mask(
@@ -249,11 +314,12 @@ mod tests {
                     }
                     2 if filter.channel.is_some() => filter.channel = Some(Arc::from("other")),
                     3 if filter.actor_id.is_some() => filter.actor_id = Some(Arc::from("other")),
-                    4 if filter.audience_type.is_some() => {
-                        filter.audience_type = Some(Arc::from("other"));
-                    }
-                    5 if filter.audience_id.is_some() => {
-                        filter.audience_id = Some(Arc::from("other"));
+                    4 if filter.recipient_type.is_some() => {
+                        if random.next() & 1 == 0 {
+                            filter.recipient_type = Some(Arc::from("other"));
+                        } else {
+                            filter.recipient_identity = Some(Arc::from("other"));
+                        }
                     }
                     _ => {}
                 }

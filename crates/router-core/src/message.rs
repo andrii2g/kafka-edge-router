@@ -39,12 +39,12 @@ pub struct RoutingMetadata {
     /// Actor identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_id: Option<Arc<str>>,
-    /// Audience category, paired with `audience_id`.
+    /// Open recipient category, paired with `recipient_identity`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audience_type: Option<Arc<str>>,
-    /// Audience identifier, paired with `audience_type`.
+    pub recipient_type: Option<Arc<str>>,
+    /// Recipient identity, paired with `recipient_type`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audience_id: Option<Arc<str>>,
+    pub recipient_identity: Option<Arc<str>>,
     /// MIME type of the payload.
     pub content_type: Arc<str>,
     /// Producer timestamp in Unix milliseconds when available.
@@ -67,16 +67,16 @@ impl RoutingMetadata {
             ("type", self.message_type.as_deref()),
             ("channel", self.channel.as_deref()),
             ("actor_id", self.actor_id.as_deref()),
-            ("audience_type", self.audience_type.as_deref()),
-            ("audience_id", self.audience_id.as_deref()),
+            ("recipient_type", self.recipient_type.as_deref()),
+            ("recipient_identity", self.recipient_identity.as_deref()),
         ] {
             if let Some(value) = value {
                 validate_identifier(field, value, 256)?;
             }
         }
 
-        if self.audience_type.is_some() != self.audience_id.is_some() {
-            return Err(CoreError::IncompleteAudience);
+        if self.recipient_type.is_some() != self.recipient_identity.is_some() {
+            return Err(CoreError::IncompleteRecipient);
         }
         Ok(())
     }

@@ -1,12 +1,10 @@
 # Kafka Edge Router
 
-High-performance and low-latency Rust daemon that consumes Kafka records and routes them to filtered
-WebSocket, Server-Sent Events, gRPC, and outbound HTTP webhook subscribers.
+High-performance, low-latency Rust daemon that consumes Kafka records and routes them to filtered WebSocket, Server-Sent Events, gRPC, and outbound HTTP webhook subscribers.
 
 [![CI](https://github.com/andrii2g/kafka-edge-router/actions/workflows/ci.yml/badge.svg)](https://github.com/andrii2g/kafka-edge-router/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-APACHE)
 [![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org/)
-
 
 ```mermaid
 flowchart TB
@@ -23,152 +21,66 @@ flowchart TB
     webhooks --> callbacks["HTTP callbacks"]
 ```
 
-## What is already implemented
+## Contents
 
-This repository is an implementation scaffold, not a diagram-only starter. It contains:
+- [Kafka Edge Router](#kafka-edge-router)
+  - [Contents](#contents)
+  - [Capabilities](#capabilities)
+  - [Design invariants](#design-invariants)
+  - [Getting started](#getting-started)
+  - [Interfaces and routing](#interfaces-and-routing)
+    - [Public endpoints](#public-endpoints)
+    - [Kafka message contract](#kafka-message-contract)
+  - [Delivery and scaling](#delivery-and-scaling)
+  - [Operations and security](#operations-and-security)
+  - [Documentation](#documentation)
+  - [Development](#development)
+  - [Design and operational boundaries](#design-and-operational-boundaries)
+  - [License](#license)
 
-- a Cargo workspace with six focused crates;
-- a tenant-isolated, exact/wildcard route index;
-- at most 64 direct route lookups for six populated optional dimensions;
-- one bounded queue per connection or webhook destination;
-- duplicate-match coalescing per connection;
-- configurable slow-consumer eviction;
-- Kafka header decoding without parsing payloads for routing;
-- explicit Kafka offset commits after local routing policy has completed;
-- an idempotent Kafka producer for HTTP and gRPC publishing;
-- WebSocket subscribe, unsubscribe, ping, and live delivery;
-- fixed-filter SSE streams with keep-alives and reconnect-compatible message ids;
-- gRPC server streaming, bidirectional streaming, publishing, and status;
-- static HTTP webhook destinations with ordering, timeouts, retries, HMAC signing,
-  no redirects, hostname allowlists, and literal private-IP rejection;
-- health, readiness, status, and Prometheus-format metrics endpoints;
-- graceful `SIGINT`/`SIGTERM` shutdown;
-- local Kafka, container, Kubernetes, systemd, CI, examples, and smoke-test files;
-- Kafka-backed durable webhook commands, restart-safe retries, and dead letters;
-- an ordered Codex execution backlog in [`tasks/`](tasks/README.md).
+## Capabilities
 
-The production-hardening boundary is explicit. DNS-aware SSRF enforcement, JWT/JWKS
-authentication, TLS termination, cluster peer forwarding,
-and end-to-end durable client sessions are deliberately tracked as follow-on tasks
-rather than being implied by an unsafe placeholder.
+Kafka Edge Router provides:
+
+- tenant-isolated exact and wildcard routing from bounded Kafka headers;
+- deterministic matching with at most 32 direct route lookups for five populated logical
+  dimensions;
+- bounded per-connection and per-webhook queues with configurable slow-consumer eviction;
+- WebSocket dynamic subscriptions, SSE fixed-filter streams, and gRPC server and
+  bidirectional streaming;
+- HTTP and gRPC publishing through an idempotent Kafka producer;
+- volatile and Kafka-backed durable webhook delivery with ordered retries, HMAC signing,
+  SSRF controls, and dead-letter handling;
+- JWT/JWKS, trusted-proxy, proxy-mTLS, static bearer, and local-development authentication
+  modes;
+- health, readiness, status, Prometheus metrics, and optional OTLP/HTTP tracing;
+- graceful process shutdown and production deployment assets for containers, Kubernetes,
+  and systemd; and
+- reproducible integration, load, soak, security, and release verification workflows.
 
 ## Design invariants
 
-1. **The matcher never parses the payload.** Route dimensions come from Kafka headers.
-2. **The hot path never waits for network I/O.** It uses bounded `try_send` fan-out.
-3. **No queue is unbounded.** Slow consumers are disconnected after a configured number
-   of queue-full outcomes.
-4. **A connection belongs to one tenant.** Every subscription must use that tenant.
-5. **Payload bytes are copied once from Kafka and shared with `Arc`/`Bytes`.**
-6. **Webhooks do not run inside the Kafka consumer task.** Each destination has its own
-   ordered worker and queue.
-7. **Live client delivery is best effort.** Duplicate Kafka records are possible and
-   clients must deduplicate by `message_id`.
-8. **Ordering is defined by Kafka partition.** Choose message keys for the entity whose
-   ordering matters.
+1. **The matcher never parses payloads.** Route dimensions come from Kafka headers.
+2. **The hot path never waits for network I/O.** Fan-out uses bounded `try_send`.
+3. **No delivery queue is unbounded.** Persistent slow consumers are disconnected.
+4. **Every connection belongs to one tenant.** Authentication determines the tenant boundary for all subscriptions and publishes.
+5. **Payload bytes are copied once from Kafka.** Destinations share `Arc` and `Bytes`.
+6. **Webhook HTTP calls never run in the Kafka consumer loop.**
+7. **Every protocol envelope retains `message_id`.** Consumers use it for deduplication.
+8. **Ordering is Kafka partition-local.** Message keys select the entity whose ordering
+   matters.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and
-[`docs/DELIVERY_SEMANTICS.md`](docs/DELIVERY_SEMANTICS.md).
+The complete rationale is documented in [Architecture](docs/ARCHITECTURE.md), [Delivery semantics](docs/DELIVERY_SEMANTICS.md), and the [architecture decision records](docs/adr/README.md).
 
-## Quick start
+## Getting started
 
-### Prerequisites
+Follow the [Quick start guide](docs/QUICKSTART.md) to start the local Kafka broker, run the daemon, subscribe through a live protocol, publish an event, and execute the smoke test.
 
-- Rust 1.88 or newer, with `rustfmt` and `clippy`;
-- Docker with Compose for the local Kafka broker;
-- `curl`; and
-- optionally `grpcurl` and a modern browser for protocol examples.
+The checked-in local configuration is intended only for development. Production deployment starts with [`config/router.production.example.toml`](config/router.production.example.toml) and the [operations guide](docs/OPERATIONS.md).
 
-#### Windows and WSL
+## Interfaces and routing
 
-Codex runs Windows-native commands and invokes Linux tooling, including Docker, through
-the WSL distribution configured by `WSL_DISTRIBUTION` in [`AGENTS.md`](AGENTS.md). List
-the distributions installed on your machine from PowerShell:
-
-```powershell
-wsl --list --quiet
-```
-
-If the configured name does not match your installation, update only the
-`WSL_DISTRIBUTION` value in `AGENTS.md` (for example, `Ubuntu-24.04`).
-
-### Start Kafka and create the input topic
-
-```bash
-./scripts/dev-up.sh
-```
-
-The local Compose file starts Apache Kafka on `localhost:9092` and creates a
-six-partition `router.input` topic.
-
-### Run the daemon
-
-```bash
-cargo run -p routerd -- --config config/router.toml
-```
-
-Expected listeners:
-
-```text
-HTTP / WebSocket / SSE  127.0.0.1:8080
-public gRPC             127.0.0.1:9090
-Kafka                   127.0.0.1:9092
-```
-
-The checked-in local configuration uses authentication mode `disabled` with tenant
-`tenant-demo`. This is intentionally unsuitable for a public deployment.
-
-### Subscribe
-
-Open [`examples/websocket-client.html`](examples/websocket-client.html), or connect
-with any WebSocket client and send:
-
-```json
-{
-  "operation": "subscribe",
-  "subscription_id": "news-for-team-17",
-  "filter": {
-    "kind": "content",
-    "type": "broadcast",
-    "channel": "news",
-    "audience_type": "team",
-    "audience_id": "team-17"
-  }
-}
-```
-
-For SSE:
-
-```bash
-curl -N 'http://127.0.0.1:8080/v1/events?tenant_id=tenant-demo&kind=content&channel=news'
-```
-
-The browser example is [`examples/sse-client.html`](examples/sse-client.html). SSE
-reconnects resume live delivery only; `Last-Event-ID` is accepted but no missed events
-are replayed.
-
-For gRPC, use the commands in [`examples/grpcurl.md`](examples/grpcurl.md).
-
-### Publish
-
-```bash
-./scripts/publish-example.sh
-```
-
-The HTTP publish endpoint accepts exactly one JSON `payload` or base64
-`payload_base64`, publishes it to Kafka, and returns the broker partition and offset.
-Publishing requires the tenant to be listed in `auth.publish_tenants`. The Kafka
-consumer then receives the record and routes it to matching subscribers.
-
-### Smoke test
-
-With Kafka and the daemon running:
-
-```bash
-./scripts/smoke-test.sh
-```
-
-## Public endpoints
+### Public endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -180,119 +92,72 @@ With Kafka and the daemon running:
 | `GET` | `/v1/ws` | Upgrade to a dynamic WebSocket session |
 | `GET` | `/v1/events` | Open a fixed-filter SSE stream |
 
-The gRPC contract is
-[`crates/router-proto/proto/router/v1/router.proto`](crates/router-proto/proto/router/v1/router.proto).
+The gRPC service supports fixed and bidirectional subscriptions, publishing, status,
+health, and optional reflection. Stable request, response, error, and size-limit contracts
+are defined in [Public protocol contracts](docs/PROTOCOLS.md). The source schema is
+[`router.proto`](crates/router-proto/proto/router/v1/router.proto).
 
-## Observability
+### Kafka message contract
 
-Prometheus metrics use fixed `stage`, `protocol`, and rebalance-event labels. Optional OTLP/HTTP
-traces propagate bounded W3C trace headers, and readiness can depend on recent Kafka health with
-hysteresis. See [the observability runbook](docs/OBSERVABILITY.md), the
-[Grafana dashboard](deploy/observability/grafana-dashboard.json), and the
-[Prometheus alert rules](deploy/observability/prometheus-alerts.yaml).
+Routing metadata is encoded as Kafka headers. Only `x-tenant-id` is mandatory;
+`x-message-id` falls back to `topic:partition:offset`, and `x-content-type` falls
+back to `application/octet-stream`.
 
-## Kafka record contract
+A filter has one mandatory tenant and five optional exact dimensions: `kind`, `type`,
+`channel`, `actor_id`, and the atomic `recipient_type` plus `recipient_identity` pair.
+Omitted dimensions are wildcards. Tenant is never wildcardable. A fully populated message
+produces at most `2^5 = 32` direct lookups rather than a scan of all subscriptions.
+Recipient types are open bounded strings, so new categories do not require router changes.
 
-Routing metadata should be encoded as Kafka headers. Only `x-tenant-id` is mandatory;
-`x-message-id` falls back to `topic:partition:offset`, and `x-content-type` falls back
-to `application/octet-stream`.
+See [Kafka message contract](docs/MESSAGE_CONTRACT.md) for headers, keys, examples, and
+compatibility rules.
 
-| Header | Required | Meaning |
-|---|---:|---|
-| `x-message-id` | no | Stable idempotency key |
-| `x-tenant-id` | yes | Tenant boundary |
-| `x-kind` | no | Domain category |
-| `x-type` | no | Domain subtype |
-| `x-channel` | no | Logical channel |
-| `x-actor-id` | no | Actor identifier |
-| `x-audience-type` | paired | Audience category |
-| `x-audience-id` | paired | Audience identifier |
-| `x-content-type` | no | Payload MIME type |
-| `traceparent` | no | Bounded W3C remote trace parent |
-| `tracestate` | paired | Optional W3C vendor trace state |
+## Delivery and scaling
 
-A recommended Kafka key is:
+| Boundary | Semantics |
+|---|---|
+| Kafka to router | At least once |
+| Router to live client | Bounded, best effort |
+| Router to webhook | Explicit volatile or Kafka-backed durable mode |
+| Ordering | Kafka partition-local |
+| Duplicates | Possible; deduplicate by `message_id` |
 
-```text
-tenant_id:audience_type:audience_id
-```
+A Kafka offset is committed after a valid record has completed the configured local
+routing policy. That commit is not an end-to-end client acknowledgement. Durable webhook
+mode persists destination commands and retry state in Kafka before the corresponding
+source progress is committed.
 
-When no audience exists, use:
+Each router pod uses a unique Kafka consumer group and receives the complete stream. This
+keeps subscriptions node-local and avoids distributed peer forwarding. Kafka read and
+matching work therefore increase with replica count and must be included in capacity
+planning.
 
-```text
-tenant_id:channel:channel_id
-```
+Queue capacities, delivery failure windows, duplicate scenarios, webhook persistence, and
+horizontal-scaling rationale are covered by:
 
-The complete contract is in [`docs/MESSAGE_CONTRACT.md`](docs/MESSAGE_CONTRACT.md).
+- [Delivery semantics](docs/DELIVERY_SEMANTICS.md)
+- [Durable webhook operations](docs/WEBHOOK_OPERATIONS.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Performance qualification](docs/PERFORMANCE.md)
 
-## Subscription matching
+## Operations and security
 
-A filter has one mandatory tenant and six optional exact dimensions. Omitted optional
-dimensions are wildcards:
+Production uses loopback-only daemon listeners behind a TLS proxy. Authentication can use
+validated JWT/JWKS identity or proxy-mTLS identity; local and static modes are available
+for controlled environments. Tenant filters are always checked against and rewritten to
+the authenticated principal.
 
-```json
-{
-  "tenant_id": "tenant-demo",
-  "kind": "content",
-  "channel": "news"
-}
-```
+Webhook delivery disables redirects and ambient egress proxies. Every DNS answer is
+bounded, revalidated, and pinned for an attempt, while private and special addresses are
+rejected by default.
 
-For a message with all six optional dimensions populated, the matcher constructs all
-exact/wildcard combinations and performs `2^6 = 64` hash lookups. It does not scan all
-subscriptions. A connection matching several filters receives one queue item containing
-all matching subscription ids.
-
-Payload-expression filters are intentionally unsupported. They introduce payload
-parsing, unpredictable latency, authorization complexity, and denial-of-service risk.
-
-## Delivery semantics
-
-The default semantics are:
-
-```text
-Kafka -> router       at least once
-router -> live client best effort
-router -> webhook     explicit volatile or Kafka-backed durable mode
-ordering              Kafka partition order
-duplicates            possible
-```
-
-An offset is committed after the record is valid and has been accepted or intentionally
-dropped according to the configured local queue policy. This is not an end-to-end
-acknowledgement. A process crash can still occur between offset commit and socket write.
-Every consumer must use `message_id` as an idempotency key.
-
-`webhooks.mode = "volatile"` retains bounded in-memory retry and restart loss.
-`webhooks.mode = "durable"` persists matched commands before source commit, resumes
-persisted retries after restart, and publishes exhausted/permanent failures to a
-dead-letter topic. See [`docs/WEBHOOK_OPERATIONS.md`](docs/WEBHOOK_OPERATIONS.md).
-
-## Authentication modes
-
-`auth.mode` supports:
-
-- `disabled`: local development only; tenant comes from the request or
-  `auth.default_tenant`;
-- `static_bearer`: maps opaque bearer tokens to exactly one tenant;
-- `trusted_header`: trusts a tenant header supplied by an already authenticated reverse
-  proxy.
-
-All subscriptions are rewritten to the authenticated tenant. A caller cannot use a
-filter or publish request to cross that boundary.
-
-Production should add TLS and use either a validated JWT/JWKS implementation or a
-trusted identity-aware proxy. See [`docs/SECURITY.md`](docs/SECURITY.md).
-
-## Configuration
-
-Validate a file without starting listeners:
+Configuration can be validated without starting listeners:
 
 ```bash
-cargo run -p routerd -- --config config/router.toml --check-config
+cargo run --locked -p routerd -- --config config/router.toml --check-config
 ```
 
-Environment variables overlay TOML using double underscores:
+Environment variables overlay TOML with double underscores:
 
 ```bash
 export ROUTER__SERVER__HTTP_ADDR=0.0.0.0:8080
@@ -300,53 +165,47 @@ export ROUTER__KAFKA__CONSUMER__BROKERS=kafka.internal:9092
 export RUST_LOG=routerd=debug,router_core=trace
 ```
 
-Use [`config/router.production.example.toml`](config/router.production.example.toml)
-as a production checklist, not as a secret-management mechanism.
+Operational guidance is organized by responsibility:
 
-## Queue capacity limits
+- [Security model](docs/SECURITY.md)
+- [Operations guide](docs/OPERATIONS.md)
+- [Observability](docs/OBSERVABILITY.md)
+- [Release and rollback](docs/RELEASE.md)
+- [Kubernetes deployment](deploy/kubernetes/README.md)
 
-Every registered delivery queue is bounded by `router.max_queue_capacity`. Public WS,
-SSE, and gRPC requests are further restricted by `api.max_stream_queue_capacity`; the
-default live-stream queue must not exceed either cap. Static webhook queues are validated
-against the core cap during configuration loading.
+## Documentation
 
-These caps limit queue slots, not total bytes. Size memory from maximum concurrent
-connections, configured queue depth, payload size, and envelope overhead.
+The [documentation index](docs/README.md) provides reading paths for users, application
+integrators, operators, security reviewers, and contributors.
 
-## Horizontal scaling
+| Goal | Start with |
+|---|---|
+| Run locally | [Quick start](docs/QUICKSTART.md) |
+| Integrate a client or publisher | [Public protocol contracts](docs/PROTOCOLS.md) |
+| Produce routable Kafka records | [Kafka message contract](docs/MESSAGE_CONTRACT.md) |
+| Understand guarantees | [Delivery semantics](docs/DELIVERY_SEMANTICS.md) |
+| Deploy and operate | [Operations guide](docs/OPERATIONS.md) |
+| Review architecture | [Architecture](docs/ARCHITECTURE.md) |
+| Verify or publish a release | [Release and rollback](docs/RELEASE.md) |
 
-The MVP uses a **unique Kafka consumer group per router node**. Every node receives the
-complete stream and dispatches only to clients connected to that node.
+## Development
 
-Advantages:
-
-- no distributed subscription database;
-- no router-to-router forwarding;
-- clients can connect to any healthy node; and
-- node failure handling remains ordinary Kafka and load-balancer behavior.
-
-Cost: Kafka read and route-matching work is multiplied by router-node count. Measure this
-before implementing the substantially more complex shared-group/peer-forwarding model.
-The transition plan is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-
-## Repository layout
+Repository layout:
 
 ```text
 crates/router-core      matcher, queues, metrics, wire encoding
 crates/router-kafka     Kafka decoder, consumer, producer
 crates/router-api       HTTP, WebSocket, SSE, gRPC
-crates/router-proto     protobuf contract and generated code
+crates/router-proto     protobuf source and generated interfaces
 crates/router-webhook   outbound webhook validation and workers
 crates/routerd          configuration and process composition
-config/                 local and production example configuration
-docs/                   architecture, contracts, operations, ADRs
-tasks/                  ordered Codex implementation backlog
-deploy/                 Kubernetes, systemd, and Docker guidance
-examples/               browser, HTTP, and grpcurl examples
-scripts/                local environment, smoke, and repository checks
+tools/router-load       bounded end-to-end load generator
+config                  local and production example configuration
+deploy                  Kubernetes, systemd, and observability assets
+docs                    product, integration, operations, and engineering guides
 ```
 
-## Development commands
+Common verification commands:
 
 ```bash
 make fmt
@@ -356,32 +215,31 @@ make check
 make validate
 ```
 
-The committed `Cargo.lock` is enforced by local build targets, CI, container builds, and
-release builds through `--locked`.
+Contributor requirements are in [CONTRIBUTING.md](CONTRIBUTING.md). Automated contributor
+instructions remain in [AGENTS.md](AGENTS.md); they are intentionally separate from the
+product documentation.
 
-## Codex workflow
+## Design and operational boundaries
 
-1. Read [`AGENTS.md`](AGENTS.md).
-2. Read the selected task in [`tasks/`](tasks/README.md).
-3. Inspect the named files before modifying anything.
-4. Preserve every architecture invariant unless the task explicitly changes one.
-5. Add tests before or with behavior changes.
-6. Run the task's required checks.
-7. Update `docs/IMPLEMENTATION_STATUS.md` and `CHANGELOG.md` when acceptance criteria
-   are met.
-8. Keep commits scoped to one task.
+These are explicit properties of the current architecture, not untracked implementation
+placeholders:
 
-A ready-to-paste initial instruction is available in [`CODEX_PROMPT.md`](CODEX_PROMPT.md).
+- live subscriptions are ephemeral and node-local; reconnecting clients resubscribe and
+  deduplicate by `message_id`;
+- routing evaluates bounded Kafka headers and deliberately excludes arbitrary payload
+  expressions from the matching path;
+- full-stream replicas intentionally use unique Kafka consumer groups instead of shared
+  groups and peer forwarding;
+- route mutations are serialized by one process-wide mutex while dispatch remains
+  lock-independent;
+- standard Kubernetes `NetworkPolicy` cannot enforce DNS-name webhook allowlists, so
+  deployments requiring FQDN policy need an appropriate egress gateway or CNI; and
+- published performance evidence is scoped to its recorded hardware, configuration,
+  payload, fan-out, and commit and must be reproduced for each capacity plan.
 
-## Known production limits
+See the [release notes](docs/releases/v0.1.0-rc.1.md) for the release-specific statement
+of these boundaries.
 
-- Live WS, SSE, and gRPC delivery is bounded and live-only; there is no durable client acknowledgement or resume protocol.
-- Full-stream replicas intentionally use unique Kafka consumer groups, increasing broker read traffic with replica count.
-- TLS terminates at the validated local proxy in production; `routerd` listeners remain loopback-only.
-- Volatile webhook mode loses pending retries on restart; durable mode requires three operator-managed Kafka topics.
-- Capacity claims require workload-specific benchmark, profile, multi-hour soak, and game-day evidence.
-- Release artifacts are trusted only after checksum, signature, provenance, SBOM, and vulnerability-policy verification.
 ## License
 
-- Apache License, Version 2.0;
-
+Apache License, Version 2.0. See [LICENSE](LICENSE-APACHE).

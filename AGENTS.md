@@ -64,10 +64,11 @@ Before editing:
 1. `README.md`
 2. `docs/ARCHITECTURE.md`
 3. `docs/DELIVERY_SEMANTICS.md`
-4. the selected file in `tasks/`
-5. the affected crate's public types and tests
+4. the relevant issue, change request, ADR, or release checklist;
+5. the affected crate's public types and tests.
 
-Do not start an unscoped refactor. Select one task and satisfy its acceptance criteria.
+Do not start an unscoped refactor. Define the requested behavior and acceptance criteria
+before implementation, using the issue or change request when one exists.
 
 ## Non-negotiable invariants
 
@@ -134,7 +135,7 @@ Every behavior change needs the narrowest useful test:
 - security fixes: positive and negative cases;
 - performance changes: Criterion or a reproducible load scenario.
 
-Required before a task is complete:
+Required before a change is complete:
 
 ```bash
 cargo fmt --all -- --check
@@ -148,23 +149,22 @@ Run `cargo test --doc --workspace` when public examples or rustdoc change.
 ## Change protocol
 
 - Keep public API changes intentional and document migration impact.
-- Update the protobuf field numbers only by adding fields; never reuse or renumber a
+- Update protobuf field numbers only by adding fields; never reuse or renumber a
   published field.
-- Update `docs/IMPLEMENTATION_STATUS.md` when a task changes capability status.
-- Update `CHANGELOG.md` under `Unreleased` for externally observable changes.
+- Update `CHANGELOG.md` for externally observable changes.
 - Add or update an ADR for a delivery-semantic, topology, security-boundary, or storage
   decision.
-- Use a conventional commit title from the task file.
+- Use a conventional commit title that describes the completed change.
 
 ## Definition of done
 
-A task is done only when:
+A change is done only when:
 
 - all acceptance criteria are demonstrably met;
 - required tests pass;
 - failure paths and cancellation paths are covered;
 - configuration and operational docs are accurate;
 - no new unbounded resource exists;
-- no placeholder `TODO` remains in the changed behavior unless the task explicitly
-  creates a separately tracked follow-up; and
-- the implementation-status matrix and changelog are current.
+- no placeholder `TODO` remains in the changed behavior unless it creates a separately
+  tracked follow-up; and
+- the changelog and maintained product documentation are current.

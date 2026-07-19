@@ -82,8 +82,8 @@ pub fn decode_message<M: Message>(
         message_type: optional_header(record, "x-type")?.map(Arc::from),
         channel: optional_header(record, "x-channel")?.map(Arc::from),
         actor_id: optional_header(record, "x-actor-id")?.map(Arc::from),
-        audience_type: optional_header(record, "x-audience-type")?.map(Arc::from),
-        audience_id: optional_header(record, "x-audience-id")?.map(Arc::from),
+        recipient_type: optional_header(record, "x-recipient-type")?.map(Arc::from),
+        recipient_identity: optional_header(record, "x-recipient-identity")?.map(Arc::from),
         content_type: Arc::from(content_type),
         timestamp_ms: record.timestamp().to_millis(),
         source: Some(KafkaPosition {
@@ -185,18 +185,18 @@ mod tests {
     }
 
     #[test]
-    fn requires_audience_headers_as_a_pair() {
+    fn requires_recipient_headers_as_a_pair() {
         let error = decode_message(
             &record(
                 &[
                     ("x-tenant-id", Some(b"tenant-a")),
-                    ("x-audience-type", Some(b"team")),
+                    ("x-recipient-type", Some(b"team")),
                 ],
                 b"payload",
             ),
             1024,
         )
-        .expect_err("incomplete audience");
+        .expect_err("incomplete recipient");
         assert!(matches!(error, DecodeError::InvalidMetadata(_)));
     }
 
