@@ -11,9 +11,9 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 prost = "0.14"
 rdkafka = { version = "0.39", default-features = false }
-router-kafka = { path = "../crates/router-kafka" }
-router-proto = { path = "../crates/router-proto" }
-router-webhook = { path = "../crates/router-webhook" }
+router-kafka = { version = "0.1.0", path = "../crates/router-kafka" }
+router-proto = { version = "0.1.0", path = "../crates/router-proto" }
+router-webhook = { version = "0.1.0", path = "../crates/router-webhook" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

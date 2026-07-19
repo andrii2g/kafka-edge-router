@@ -17,10 +17,10 @@ config.workspace = true
 opentelemetry.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry_sdk.workspace = true
-router-api = { path = "../router-api" }
-router-core = { path = "../router-core" }
-router-kafka = { path = "../router-kafka" }
-router-webhook = { path = "../router-webhook" }
+router-api = { version = "0.1.0", path = "../router-api" }
+router-core = { version = "0.1.0", path = "../router-core" }
+router-kafka = { version = "0.1.0", path = "../router-kafka" }
+router-webhook = { version = "0.1.0", path = "../router-webhook" }
 serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true

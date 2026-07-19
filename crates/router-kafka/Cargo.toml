@@ -10,7 +10,7 @@ description = "Kafka ingestion and publishing adapters for kafka-edge-router"
 async-trait.workspace = true
 bytes.workspace = true
 rdkafka.workspace = true
-router-core = { path = "../router-core" }
+router-core = { version = "0.1.0", path = "../router-core" }
 serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

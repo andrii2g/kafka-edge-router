@@ -20,6 +20,7 @@ for detailed guidance.
 |---|---|
 | Production configuration, health, capacity, upgrades, and incidents | [Operations guide](OPERATIONS.md) |
 | Authentication, tenant isolation, abuse controls, and webhook SSRF | [Security model](SECURITY.md) |
+| Dependency identity, provenance, vulnerability, and trust policy | [Supply-chain policy](SUPPLY_CHAIN.md) |
 | Metrics, traces, dashboards, and alert response | [Observability](OBSERVABILITY.md) |
 | Durable webhook topics, monitoring, and DLQ replay | [Durable webhook operations](WEBHOOK_OPERATIONS.md) |
 | Benchmarks, profiles, load, and soak qualification | [Performance qualification](PERFORMANCE.md) |

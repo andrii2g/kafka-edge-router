@@ -12,3 +12,4 @@ consequences, and a concrete revisit trigger when appropriate.
 - [0004: Live-delivery semantics](0004-live-delivery-semantics.md)
 - [0005: Durable webhook delivery](0005-durable-webhook-delivery.md)
 - [0006: Extensible atomic recipient routing](0006-recipient-routing-dimension.md)
+- [0007: Verify third-party supply-chain inputs](0007-verify-third-party-supply-chain.md)

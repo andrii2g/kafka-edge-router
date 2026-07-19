@@ -3,6 +3,3 @@ kind: Kustomization
 namespace: kafka-router-rc
 resources:
   - ../../base
-images:
-  - name: ghcr.io/andrii2g/kafka-edge-router
-    newTag: v0.1.0-rc.1

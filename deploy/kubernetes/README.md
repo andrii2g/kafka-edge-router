@@ -46,26 +46,26 @@ and `auto_offset_reset` must account for this topology.
 
 ## Render and validate
 
-Production:
+The checked-in application image is an intentionally invalid zero digest. A direct apply
+fails closed. Obtain the digest from a release `IMAGE-DIGEST` asset, then use the supported
+deployment path:
 
 ```bash
-kubectl apply -f deploy/kubernetes/namespace.yaml
-kubectl kustomize deploy/kubernetes
-kubectl apply --server-side -k deploy/kubernetes
+./scripts/deploy-kubernetes.sh \
+  "$KUBECONFIG" kafka-router sha256:REPLACE_WITH_64_HEX deploy/kubernetes
+
+./scripts/deploy-kubernetes.sh \
+  "$KUBECONFIG" kafka-router-rc sha256:REPLACE_WITH_64_HEX \
+  deploy/kubernetes/overlays/rc
 ```
 
-Isolated RC namespace:
+The script requires `cosign`, `gh`, and `kubectl`. It verifies the release workflow's
+keyless signature and GitHub build attestation before injecting the digest, applying with
+server-side field management, waiting for rollout, and reading the deployed image back.
 
-```bash
-kubectl kustomize deploy/kubernetes/overlays/rc
-kubectl --kubeconfig "$KUBECONFIG" apply --dry-run=server \
-  -k deploy/kubernetes/overlays/rc
-kubectl --kubeconfig "$KUBECONFIG" apply --server-side \
-  -k deploy/kubernetes/overlays/rc
-```
-
-Before a real rollout, replace the image tag with the verified digest from the release
-`IMAGE-DIGEST` asset. Confirm the Kafka namespace/ports, Traefik and observability namespace
+Use `kubectl kustomize` and `kubectl apply --dry-run=server` for review, but do not deploy
+the zero-digest render directly. Confirm the Kafka namespace/ports, Traefik and
+observability namespace
 labels, webhook egress policy, resource requests, issuer/audience, certificate SANs, and
 Secret names for the target cluster.
 

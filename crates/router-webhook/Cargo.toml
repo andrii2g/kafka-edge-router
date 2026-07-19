@@ -16,8 +16,8 @@ hmac.workspace = true
 http.workspace = true
 rdkafka.workspace = true
 reqwest.workspace = true
-router-core = { path = "../router-core" }
-router-kafka = { path = "../router-kafka" }
+router-core = { version = "0.1.0", path = "../router-core" }
+router-kafka = { version = "0.1.0", path = "../router-kafka" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

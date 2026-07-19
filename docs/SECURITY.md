@@ -13,7 +13,7 @@ authorization boundary. Payloads never participate in routing or authorization.
 | public plaintext or trusted-header bypass | protected_proxy requires authenticated mode and loopback-only daemon listeners | expose only the TLS/mTLS proxy and strip identity headers |
 | memory/CPU exhaustion | bounded queues, global/per-tenant connection and subscription caps, bounded principal table, command/publish fixed-window rates | size limits for expected load and alert on rejections |
 | webhook SSRF or DNS rebinding | HTTPS by default, exact host and port policy, every resolved address checked, per-attempt DNS resolution pinned to the connection, redirects and environment proxies disabled | maintain egress firewall and DNS policy |
-| dependency or image compromise | locked dependencies, dependency audit, history secret scan, and release-image vulnerability scan | review CI findings and pin actions for high-assurance releases |
+| dependency or image compromise | locked crates.io dependencies, cargo-deny, cargo-vet, SHA-pinned Actions, digest-pinned images, PR dependency review, release signatures and attestations | review dependency trust changes and deploy only verified digests |
 
 ## Identity and authorization
 
@@ -88,8 +88,10 @@ sensitive and should not be exported as unbounded metric labels.
 
 ## Security verification
 
-The security workflow runs cargo audit, Gitleaks history scanning, and a Trivy scan of the
-built release image. The fuzz package supplies cargo-fuzz targets for Kafka header
+The security workflow runs dependency review, cargo-deny, cargo-vet, cargo audit, Gitleaks
+history scanning, and a Trivy scan of the built release image. See the
+[supply-chain policy](SUPPLY_CHAIN.md) for trust semantics and update review. The fuzz
+package supplies cargo-fuzz targets for Kafka header
 decoding, command JSON, webhook URLs, and protobuf messages. JWT tests cover expiry,
 issuer, audience, malformed tokens, algorithm confusion, scopes, and JWKS rotation.
 Protocol suites retain positive and cross-tenant negative cases.

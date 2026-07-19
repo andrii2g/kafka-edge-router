@@ -141,6 +141,8 @@ Required before a change is complete:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
+cargo deny check
+cargo vet --locked
 python scripts/validate-repo.py
 ```
 
