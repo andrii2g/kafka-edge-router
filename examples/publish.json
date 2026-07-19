@@ -4,8 +4,8 @@
   "kind": "content",
   "type": "broadcast",
   "channel": "news",
-  "audience_type": "team",
-  "audience_id": "team-17",
+  "recipient_type": "team",
+  "recipient_identity": "team-17",
   "content_type": "application/json",
   "payload": {
     "header": "Router online",

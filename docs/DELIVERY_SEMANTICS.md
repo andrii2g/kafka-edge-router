@@ -125,7 +125,7 @@ passwords. See [`WEBHOOK_OPERATIONS.md`](WEBHOOK_OPERATIONS.md) and ADR 0005.
 HTTP or gRPC publish returns after the idempotent Kafka producer receives partition and
 offset. It proves broker acknowledgement, not consumption or downstream delivery.
 
-The producer uses a stable entity key selected from audience, channel, or the tenant. A
+The producer uses a stable entity key selected from recipient, channel, or the tenant. A
 validated explicit ordering key is allowed and is always prefixed with the authenticated
 tenant. Kafka order remains partition-local.
 
@@ -135,7 +135,7 @@ especially when the acknowledgement response can be lost. Reusing an id does not
 the public API a deduplicating store: each broker-acknowledged call may append a record.
 Consumers and webhook receivers use the stable id for idempotent processing.
 
-Payload size, MIME syntax, audience pairing, ordering-key syntax, and routing identifiers
+Payload size, MIME syntax, recipient pairing, ordering-key syntax, and routing identifiers
 are validated before Kafka send. HTTP JSON and base64 forms and gRPC raw bytes converge
 on the same transport-neutral command. Kafka queue saturation and acknowledgement timeout
 remain distinct public failures.

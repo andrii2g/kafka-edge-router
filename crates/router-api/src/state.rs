@@ -453,8 +453,8 @@ mod tests {
                     message_type: None,
                     channel: None,
                     actor_id: None,
-                    audience_type: None,
-                    audience_id: None,
+                    recipient_type: None,
+                    recipient_identity: None,
                 },
             )
             .expect("subscribe");

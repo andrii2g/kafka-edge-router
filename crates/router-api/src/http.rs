@@ -9,6 +9,7 @@ use std::{
 use async_stream::stream;
 use axum::{
     extract::{
+        rejection::JsonRejection,
         ws::{close_code, CloseFrame, Message, WebSocket, WebSocketUpgrade},
         Query, State,
     },
@@ -144,9 +145,9 @@ struct HttpPublishRequest {
     #[serde(default)]
     actor_id: Option<String>,
     #[serde(default)]
-    audience_type: Option<String>,
+    recipient_type: Option<String>,
     #[serde(default)]
-    audience_id: Option<String>,
+    recipient_identity: Option<String>,
     #[serde(default)]
     ordering_key: Option<String>,
     #[serde(default)]
@@ -168,14 +169,19 @@ struct HttpPublishResponse {
 async fn publish(
     State(state): State<ApiState>,
     headers: HeaderMap,
-    Json(request): Json<HttpPublishRequest>,
+    request: Result<Json<HttpPublishRequest>, JsonRejection>,
 ) -> Result<Json<HttpPublishResponse>, ApiError> {
     state
         .router
         .metrics()
         .record_publish_attempt(PublishProtocol::Http);
     let started = Instant::now();
-    let result = publish_http_inner(&state, &headers, request).await;
+    let result = match request {
+        Ok(Json(request)) => publish_http_inner(&state, &headers, request).await,
+        Err(_) => Err(ApiError::BadRequest(
+            "request body is not valid for the publish contract".to_owned(),
+        )),
+    };
     state
         .router
         .metrics()
@@ -222,8 +228,8 @@ async fn publish_http_inner(
             message_type: request.message_type.map(Arc::from),
             channel: request.channel.map(Arc::from),
             actor_id: request.actor_id.map(Arc::from),
-            audience_type: request.audience_type.map(Arc::from),
-            audience_id: request.audience_id.map(Arc::from),
+            recipient_type: request.recipient_type.map(Arc::from),
+            recipient_identity: request.recipient_identity.map(Arc::from),
             ordering_key: request.ordering_key.map(Arc::from),
             content_type: Arc::from(content_type),
             payload,
@@ -322,7 +328,7 @@ async fn websocket(
 enum WsCommand {
     Subscribe {
         subscription_id: String,
-        filter: FilterInput,
+        filter: Value,
     },
     Unsubscribe {
         subscription_id: String,
@@ -514,6 +520,10 @@ fn handle_ws_command(
             let Ok(subscription_id) = SubscriptionId::new(subscription_id) else {
                 return ws_error("invalid_subscription_id", "subscription_id is invalid");
             };
+            let filter: FilterInput = match serde_json::from_value(filter) {
+                Ok(filter) => filter,
+                Err(_) => return ws_error("invalid_filter", "filter is invalid"),
+            };
             let filter = match filter.into_filter(principal) {
                 Ok(filter) => filter,
                 Err(ApiError::Forbidden) => {
@@ -576,7 +586,7 @@ fn ws_subscribe_error(error: &CoreError) -> String {
             ws_error("connection_closed", "connection is no longer registered")
         }
         CoreError::InvalidIdentifier { .. }
-        | CoreError::IncompleteAudience
+        | CoreError::IncompleteRecipient
         | CoreError::MissingField(_) => ws_error("invalid_filter", "filter is invalid"),
         CoreError::SubscriptionNotFound
         | CoreError::ConnectionLimitReached
@@ -595,6 +605,7 @@ fn ws_error(code: &'static str, message: &'static str) -> String {
     .to_string()
 }
 #[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FilterInput {
     #[serde(default)]
     tenant_id: Option<String>,
@@ -607,9 +618,9 @@ struct FilterInput {
     #[serde(default)]
     actor_id: Option<String>,
     #[serde(default)]
-    audience_type: Option<String>,
+    recipient_type: Option<String>,
     #[serde(default)]
-    audience_id: Option<String>,
+    recipient_identity: Option<String>,
 }
 
 impl FilterInput {
@@ -621,8 +632,8 @@ impl FilterInput {
             message_type: self.message_type.map(Arc::from),
             channel: self.channel.map(Arc::from),
             actor_id: self.actor_id.map(Arc::from),
-            audience_type: self.audience_type.map(Arc::from),
-            audience_id: self.audience_id.map(Arc::from),
+            recipient_type: self.recipient_type.map(Arc::from),
+            recipient_identity: self.recipient_identity.map(Arc::from),
         })
     }
 }
@@ -641,9 +652,9 @@ struct SseQuery {
     #[serde(default)]
     actor_id: Option<String>,
     #[serde(default)]
-    audience_type: Option<String>,
+    recipient_type: Option<String>,
     #[serde(default)]
-    audience_id: Option<String>,
+    recipient_identity: Option<String>,
     #[serde(default)]
     subscription_id: Option<String>,
     #[serde(default)]
@@ -661,8 +672,8 @@ impl SseQuery {
             message_type: self.message_type,
             channel: self.channel,
             actor_id: self.actor_id,
-            audience_type: self.audience_type,
-            audience_id: self.audience_id,
+            recipient_type: self.recipient_type,
+            recipient_identity: self.recipient_identity,
         }
         .into_filter(principal)?;
         Ok((

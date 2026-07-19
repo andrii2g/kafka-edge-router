@@ -82,8 +82,16 @@ impl MessagePublisher for KafkaPublisher {
         headers = insert_optional(headers, "x-type", command.message_type.as_deref());
         headers = insert_optional(headers, "x-channel", command.channel.as_deref());
         headers = insert_optional(headers, "x-actor-id", command.actor_id.as_deref());
-        headers = insert_optional(headers, "x-audience-type", command.audience_type.as_deref());
-        headers = insert_optional(headers, "x-audience-id", command.audience_id.as_deref());
+        headers = insert_optional(
+            headers,
+            "x-recipient-type",
+            command.recipient_type.as_deref(),
+        );
+        headers = insert_optional(
+            headers,
+            "x-recipient-identity",
+            command.recipient_identity.as_deref(),
+        );
 
         let key = kafka_key(&command);
         let record = FutureRecord::to(&self.topic)
@@ -132,9 +140,12 @@ fn kafka_key(command: &PublishCommand) -> String {
     if let Some(ordering_key) = &command.ordering_key {
         return format!("{}:explicit:{ordering_key}", command.tenant_id);
     }
-    match (&command.audience_type, &command.audience_id) {
-        (Some(audience_type), Some(audience_id)) => {
-            format!("{}:{audience_type}:{audience_id}", command.tenant_id)
+    match (&command.recipient_type, &command.recipient_identity) {
+        (Some(recipient_type), Some(recipient_identity)) => {
+            format!(
+                "{}:{recipient_type}:{recipient_identity}",
+                command.tenant_id
+            )
         }
         _ => command.channel.as_ref().map_or_else(
             || command.tenant_id.to_string(),
@@ -162,8 +173,8 @@ mod tests {
             message_type: None,
             channel: Some(Arc::from("news")),
             actor_id: None,
-            audience_type: Some(Arc::from("team")),
-            audience_id: Some(Arc::from("team-7")),
+            recipient_type: Some(Arc::from("team")),
+            recipient_identity: Some(Arc::from("team-7")),
             ordering_key: None,
             content_type: Arc::from("application/json"),
             payload: Bytes::new(),
@@ -171,9 +182,15 @@ mod tests {
     }
 
     #[test]
-    fn audience_and_explicit_keys_preserve_tenant_ordering() {
+    fn recipient_and_explicit_keys_preserve_tenant_ordering() {
         let mut command = command();
-        assert_eq!(kafka_key(&command), "tenant-a:team:team-7");
+        for recipient_type in ["audience", "team", "superteam"] {
+            command.recipient_type = Some(Arc::from(recipient_type));
+            assert_eq!(
+                kafka_key(&command),
+                format!("tenant-a:{recipient_type}:team-7")
+            );
+        }
 
         command.ordering_key = Some(Arc::from("invoice-42"));
         assert_eq!(

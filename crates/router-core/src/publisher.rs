@@ -22,9 +22,9 @@ pub struct PublishCommand {
     /// Optional routing dimensions.
     pub actor_id: Option<Arc<str>>,
     /// Optional routing dimensions.
-    pub audience_type: Option<Arc<str>>,
+    pub recipient_type: Option<Arc<str>>,
     /// Optional routing dimensions.
-    pub audience_id: Option<Arc<str>>,
+    pub recipient_identity: Option<Arc<str>>,
     /// Optional caller-selected ordering key, always tenant-namespaced by Kafka.
     pub ordering_key: Option<Arc<str>>,
     /// Payload MIME type.
@@ -43,8 +43,8 @@ impl PublishCommand {
             message_type: self.message_type.clone(),
             channel: self.channel.clone(),
             actor_id: self.actor_id.clone(),
-            audience_type: self.audience_type.clone(),
-            audience_id: self.audience_id.clone(),
+            recipient_type: self.recipient_type.clone(),
+            recipient_identity: self.recipient_identity.clone(),
             content_type: Arc::clone(&self.content_type),
             timestamp_ms: None,
             source: None,

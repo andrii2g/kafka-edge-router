@@ -105,8 +105,8 @@ fn filter(tenant: &str) -> RouteFilter {
         r#type: Some("broadcast".to_owned()),
         channel: Some("news".to_owned()),
         actor_id: None,
-        audience_type: None,
-        audience_id: None,
+        recipient_type: None,
+        recipient_identity: None,
     }
 }
 
@@ -120,8 +120,8 @@ fn routed_message(id: &str) -> Arc<RoutedMessage> {
                 message_type: Some(Arc::from("broadcast")),
                 channel: Some(Arc::from("news")),
                 actor_id: None,
-                audience_type: None,
-                audience_id: None,
+                recipient_type: None,
+                recipient_identity: None,
                 content_type: Arc::from("application/json"),
                 timestamp_ms: None,
                 source: None,

@@ -139,7 +139,8 @@ async fn post(app: &AxumRouter, body: Value, authorization: Option<&str>) -> (St
         .await
         .expect("response body")
         .to_bytes();
-    let body = serde_json::from_slice(&bytes).expect("response JSON");
+    let body = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
     (status, body)
 }
 
@@ -220,7 +221,8 @@ async fn http_rejects_ambiguous_oversized_and_inconsistent_inputs_before_publish
         json!({"tenant_id":"tenant-a","content_type":"application/octet-stream","payload_base64":"***"}),
         json!({"tenant_id":"tenant-a","content_type":"application/octet-stream","payload_base64":"MTIzNDU="}),
         json!({"tenant_id":"tenant-a","content_type":"text/plain","payload":{"ok":true}}),
-        json!({"tenant_id":"tenant-a","audience_type":"team","payload":{}}),
+        json!({"tenant_id":"tenant-a","recipient_type":"team","payload":{}}),
+        json!({"tenant_id":"tenant-a","recipient_category":"team","recipient_key":"team-7","payload":{}}),
         json!({"tenant_id":"tenant-a","ordering_key":" ","payload":{}}),
     ] {
         let (status, response) = post(&app, body, None).await;
@@ -379,8 +381,8 @@ fn grpc_request(payload: Vec<u8>) -> PublishRequest {
     PublishRequest {
         message_id: Some("grpc-message".to_owned()),
         tenant_id: "tenant-a".to_owned(),
-        audience_type: Some("team".to_owned()),
-        audience_id: Some("team-7".to_owned()),
+        recipient_type: Some("team".to_owned()),
+        recipient_identity: Some("team-7".to_owned()),
         ordering_key: Some("entity-7".to_owned()),
         content_type: "application/octet-stream".to_owned(),
         payload,
@@ -447,7 +449,7 @@ async fn grpc_raw_bytes_and_errors_match_the_shared_publish_contract() {
 }
 
 #[tokio::test]
-async fn grpc_rejects_publish_permission_and_incomplete_audience() {
+async fn grpc_rejects_publish_permission_and_incomplete_recipient() {
     let publisher = RecordingPublisher::new(Outcome::Success);
     let harness = GrpcHarness::start(
         32,
@@ -471,13 +473,13 @@ async fn grpc_rejects_publish_permission_and_incomplete_audience() {
     )
     .await;
     let mut invalid = grpc_request(Vec::new());
-    invalid.audience_id = None;
+    invalid.recipient_identity = None;
     let status = harness
         .client()
         .await
         .publish(invalid)
         .await
-        .expect_err("incomplete audience");
+        .expect_err("incomplete recipient");
     assert_eq!(status.code(), Code::InvalidArgument);
     assert!(publisher.commands().is_empty());
     harness.stop().await;

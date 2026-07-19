@@ -203,8 +203,8 @@ fn router_with_subscription() -> (
                 message_type: None,
                 channel: None,
                 actor_id: None,
-                audience_type: None,
-                audience_id: None,
+                recipient_type: None,
+                recipient_identity: None,
             },
         )
         .expect("subscribe test receiver");
@@ -245,8 +245,8 @@ fn command(index: u8) -> PublishCommand {
         message_type: None,
         channel: Some(Arc::from("news")),
         actor_id: None,
-        audience_type: Some(Arc::from("team")),
-        audience_id: Some(Arc::from("team-7")),
+        recipient_type: Some(Arc::from("team")),
+        recipient_identity: Some(Arc::from("team-7")),
         ordering_key: None,
         content_type: Arc::from("application/octet-stream"),
         payload: Bytes::from(vec![index]),

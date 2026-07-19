@@ -30,7 +30,9 @@ Subscribe command:
   "subscription_id": "news",
   "filter": {
     "kind": "content",
-    "channel": "news"
+    "channel": "news",
+    "recipient_type": "team",
+    "recipient_identity": "321456"
   }
 }
 ```
@@ -75,6 +77,8 @@ Delivery:
       "kind": "content",
       "type": "broadcast",
       "channel": "news",
+      "recipient_type": "team",
+      "recipient_identity": "321456",
       "content_type": "application/json",
       "source": {
         "topic": "router.input",
@@ -212,9 +216,8 @@ gate. The gRPC reflection v1 service is controlled by
 production.
 
 Do not renumber or reuse protobuf fields. Additive fields should be optional where old
-clients can safely omit them. Task 005 changed server behavior and generated descriptors,
-not the published `router.v1` message schema, so existing generated clients remain
-source compatible.
+clients can safely omit them. Recipient fields use assigned field numbers and wire types that are part of the public
+contract. Regenerate clients from the current schema whenever source definitions change.
 
 ## HTTP publish
 
@@ -234,6 +237,8 @@ Request:
   "kind": "content",
   "type": "broadcast",
   "channel": "news",
+  "recipient_type": "team",
+  "recipient_identity": "321456",
   "content_type": "application/json",
   "payload": {"ok": true}
 }
@@ -247,9 +252,9 @@ The request must provide exactly one payload representation:
   required.
 
 Both forms are capped by `api.publish_max_payload_bytes`. The endpoint rejects unknown
-fields, ambiguous payloads, malformed base64, MIME wildcards, incomplete audience pairs,
+fields, ambiguous payloads, malformed base64, MIME wildcards, incomplete recipient pairs,
 and invalid routing identifiers before calling Kafka. gRPC carries raw `bytes payload`
-and applies the same size, metadata, audience, message-id, ordering-key, authorization,
+and applies the same size, metadata, recipient, message-id, ordering-key, authorization,
 and backend-error contract.
 
 Publishing requires both an authenticated tenant and membership in
@@ -261,7 +266,7 @@ A retry that represents the same logical event must reuse one caller-generated m
 id. The router does not suppress repeated API requests: two accepted calls can create two
 Kafka records with the same id, and consumers must deduplicate by that id.
 
-`ordering_key` is optional. When absent, the producer derives a key from the audience,
+`ordering_key` is optional. When absent, the producer derives a key from the recipient,
 then channel, then tenant. An explicit key is validated and encoded as
 `<tenant>:explicit:<ordering_key>`, so caller-controlled keys cannot share a Kafka key
 across tenants.

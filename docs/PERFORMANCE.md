@@ -5,7 +5,7 @@
 Run the matcher and bounded-dispatch benchmark from a clean, idle checkout:
 
 ```bash
-cargo bench --locked -p router-core --bench matcher -- --save-baseline task-010
+cargo bench --locked -p router-core --bench matcher -- --save-baseline release-0.1
 ```
 
 Run a bounded end-to-end sample against an already running router and Kafka broker:
@@ -40,25 +40,31 @@ Always capture source commit, dirty-worktree state, Rust version, OS/kernel, CPU
 Kafka version/partitions, router configuration, image digest, duration, and report files.
 Do not compare runs that differ in topology or security mode as if they were equivalent.
 
-## Task 010 local baseline
+## Initial release-candidate baseline
 
-Measured on 2026-07-19 at commit `aa416e8bccf5b7e8821bc4e6072947f03a2bb6a0`
-plus the Task 010 worktree, Rust 1.88.0, Windows 11 Pro build 26100, and an AMD Ryzen 7
-8845HS (8 cores, 16 logical processors). Criterion used optimized Windows MSVC binaries.
+Measured on 2026-07-19 from the recipient-contract worktree based on commit
+`8314f250e2b5eef1f5ac2ec1b50b4065bed6b656` (dirty because the contract change was under
+validation), using Rust 1.88.0, Windows 11 Pro build 26100, and an AMD Ryzen 7 8845HS
+(8 cores, 16 logical processors). Criterion used optimized Windows MSVC binaries and
+the baseline name `recipient-atomic-full`.
 Estimates below are the reported medians, not service-level objectives:
 
 | Operation | Median |
 |---|---:|
-| candidate generation, 0 dimensions | 1.546 us |
-| candidate generation, 6 dimensions | 3.065 us |
-| unmatched dispatch, 128 B | 6.120 us |
-| unmatched dispatch, 1 MiB | 6.767 us |
-| accepted fan-out, 1 connection | 6.456 us |
-| accepted fan-out, 32 connections | 10.630 us |
-| accepted fan-out, 256 connections | 45.055 us |
-| accepted fan-out, 1024 connections | 251.060 us |
-| full-queue dispatch | 6.067 us |
-| subscribe plus unsubscribe | 4.654 us |
+| candidate generation, 0 dimensions | 0.585 us |
+| candidate generation, 1 dimension | 0.612 us |
+| candidate generation, 2 dimensions | 0.654 us |
+| candidate generation, 3 dimensions | 0.736 us |
+| candidate generation, 4 dimensions | 0.932 us |
+| candidate generation, 5 dimensions | 1.479 us |
+| unmatched dispatch, 128 B | 3.029 us |
+| unmatched dispatch, 1 MiB | 2.862 us |
+| accepted fan-out, 1 connection | 3.064 us |
+| accepted fan-out, 32 connections | 7.084 us |
+| accepted fan-out, 256 connections | 37.077 us |
+| accepted fan-out, 1024 connections | 204.550 us |
+| full-queue dispatch | 2.958 us |
+| subscribe plus unsubscribe | 4.491 us |
 
 A functional Linux container sample used Apache Kafka 4.3.1, one router replica, six topic
 partitions, two connections per WS/SSE/gRPC protocol, 200 small JSON messages, and a
