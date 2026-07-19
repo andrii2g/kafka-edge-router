@@ -5,6 +5,25 @@ All notable changes will be documented here. The project follows Semantic Versio
 
 
 ## Unreleased
+- Final task audit confirmed Tasks 000-009 against their acceptance criteria and retained
+  Task 010 as scaffolded until its release-candidate qualification gates are executed.
+- Added durable-webhook restart and crash-boundary tests to the broker-backed CI command;
+  all four Kafka integration tests and both durable recovery tests pass against Kafka 4.3.1.
+- Restored standalone validation of the generic production configuration while keeping
+  mandatory `POD_UID` group suffixing in the Kubernetes-specific configuration.
+- Added bounded WS/SSE/gRPC/webhook load generation, expanded matcher/dispatch benchmarks,
+  multi-hour soak orchestration, profile helpers, and machine-readable result summaries.
+- Added production Kustomize base and RC overlay with Envoy TLS termination, pod-unique Kafka
+  group identity, external Secrets, resource/disruption/topology controls, and network policy.
+- Added a locked tagged release workflow for multi-architecture images and binaries, SBOM,
+  provenance, vulnerability scans, checksums, keyless signatures, curated RC notes, and rollback.
+- Task 010 local baseline measured 200 successful publishes with exact 400/400 WS, SSE, and
+  gRPC deliveries at a controlled 20 publishes/second; this is a functional sample, not a
+  capacity or soak claim. The multi-hour K3s soak and game day remain release gates.
+- Built final local image kafka-edge-router:task010-final as
+  sha256:d7be144b965022375c8fcfcd4fe1c2c43e48de109e8af0303759caa0a1c0e790;
+  it runs as 10001:10001, passes its configuration check, and has zero fixed HIGH or
+  CRITICAL findings under the release Trivy policy.
 
 - Added reloadable asymmetric JWT/JWKS validation, explicit subscribe/publish scopes, proxy-mTLS identity mapping, and loopback-only protected proxy mode.
 - Hardened webhook egress with per-attempt DNS validation and pinning, special-address rejection, direct-only proxy policy, redirect blocking, and destination port allowlists.

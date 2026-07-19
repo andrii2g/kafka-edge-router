@@ -1,0 +1,27 @@
+[package]
+name = "router-load"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Bounded end-to-end load and soak generator for kafka-edge-router"
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+hdrhistogram.workspace = true
+http.workspace = true
+reqwest.workspace = true
+router-proto = { path = "../../crates/router-proto" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tonic.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

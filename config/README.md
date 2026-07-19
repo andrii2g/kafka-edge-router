@@ -16,6 +16,13 @@ Arrays and maps are clearer and less error-prone in TOML, so keep topics, Kafka
 properties, bearer-token mappings, and webhook destinations in a mounted file.
 Run `routerd --check-config` before deploying a change.
 
+## Kafka pod identity
+
+`kafka.group_id_suffix_env` names an environment variable whose value is appended to
+`kafka.consumer.group_id` before validation. Kubernetes should inject the immutable pod UID
+and set `group_id_suffix_env = "POD_UID"`; startup fails when the variable is missing or the
+resolved group id is invalid. This keeps every full-stream router replica in a distinct
+consumer group without rendering configuration at runtime.
 ## WebSocket limits
 
 `api.ws_max_message_bytes` caps a complete inbound command after frame reassembly, and

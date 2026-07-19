@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
-.PHONY: help fmt lint test test-kafka check build run kafka-up kafka-down topic smoke validate docker
+.PHONY: help fmt lint test test-kafka check build run kafka-up kafka-down topic smoke validate docker bench load soak
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -44,3 +44,11 @@ validate: ## Run repository checks available without a Rust toolchain
 
 docker: ## Build the runtime container
 	docker build -t kafka-edge-router:local .
+bench: ## Run matcher and bounded-dispatch benchmarks
+	cargo bench --locked -p router-core --bench matcher
+
+load: ## Run the bounded end-to-end load generator
+	cargo run --locked --release -p router-load -- --help
+
+soak: ## Run the four-hour fault-injection soak
+	./scripts/soak-test.sh

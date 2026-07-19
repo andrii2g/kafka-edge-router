@@ -46,7 +46,9 @@ EXPECTED = [
     "crates/router-proto/proto/router/v1/router.proto",
     "crates/routerd/src/main.rs",
     "tasks/000-bootstrap-and-compile.md",
-    "deploy/kubernetes/deployment.yaml",
+    "deploy/kubernetes/base/deployment.yaml",
+    "deploy/kubernetes/kustomization.yaml",
+    "deploy/kubernetes/overlays/rc/kustomization.yaml",
 ]
 
 TEXT_SUFFIXES = {
@@ -128,13 +130,15 @@ def check_shell() -> None:
         if result.returncode:
             error(f"shell syntax {path.relative_to(ROOT)}: {result.stderr.strip()}")
         if os.name == "nt":
-            mode = subprocess.run(
+            tracked = subprocess.run(
                 ["git", "ls-files", "--stage", "--", relative],
                 text=True,
                 capture_output=True,
                 check=True,
-            ).stdout.split(maxsplit=1)[0]
-            executable = mode == "100755"
+            ).stdout.split()
+            if not tracked:
+                continue
+            executable = tracked[0] == "100755"
         else:
             executable = bool(path.stat().st_mode & stat.S_IXUSR)
         if not executable:

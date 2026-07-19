@@ -1,0 +1,127 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-edge-router-proxy
+  namespace: kafka-router
+  labels:
+    app.kubernetes.io/name: kafka-edge-router
+data:
+  envoy.yaml: |
+    admin:
+      address:
+        socket_address:
+          address: 127.0.0.1
+          port_value: 9901
+    static_resources:
+      listeners:
+        - name: public_http
+          address:
+            socket_address:
+              address: 0.0.0.0
+              port_value: 8443
+          filter_chains:
+            - transport_socket:
+                name: envoy.transport_sockets.tls
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+                  common_tls_context:
+                    tls_params:
+                      tls_minimum_protocol_version: TLSv1_2
+                    tls_certificates:
+                      - certificate_chain:
+                          filename: /var/run/router-tls/tls.crt
+                        private_key:
+                          filename: /var/run/router-tls/tls.key
+              filters:
+                - name: envoy.filters.network.http_connection_manager
+                  typed_config:
+                    "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                    stat_prefix: public_http
+                    stream_idle_timeout: 0s
+                    upgrade_configs:
+                      - upgrade_type: websocket
+                    route_config:
+                      name: local_http
+                      request_headers_to_remove: [x-tenant-id, x-client-cert, x-forwarded-client-cert]
+                      virtual_hosts:
+                        - name: router_http
+                          domains: ["*"]
+                          routes:
+                            - match: { prefix: "/" }
+                              route:
+                                cluster: router_http
+                                timeout: 0s
+                    http_filters:
+                      - name: envoy.filters.http.router
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+        - name: public_grpc
+          address:
+            socket_address:
+              address: 0.0.0.0
+              port_value: 9443
+          filter_chains:
+            - transport_socket:
+                name: envoy.transport_sockets.tls
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+                  common_tls_context:
+                    tls_params:
+                      tls_minimum_protocol_version: TLSv1_2
+                    tls_certificates:
+                      - certificate_chain:
+                          filename: /var/run/router-tls/tls.crt
+                        private_key:
+                          filename: /var/run/router-tls/tls.key
+              filters:
+                - name: envoy.filters.network.http_connection_manager
+                  typed_config:
+                    "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                    stat_prefix: public_grpc
+                    codec_type: HTTP2
+                    stream_idle_timeout: 0s
+                    route_config:
+                      name: local_grpc
+                      request_headers_to_remove: [x-tenant-id, x-client-cert, x-forwarded-client-cert]
+                      virtual_hosts:
+                        - name: router_grpc
+                          domains: ["*"]
+                          routes:
+                            - match: { prefix: "/" }
+                              route:
+                                cluster: router_grpc
+                                timeout: 0s
+                    http_filters:
+                      - name: envoy.filters.http.router
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+      clusters:
+        - name: router_http
+          connect_timeout: 1s
+          type: STATIC
+          load_assignment:
+            cluster_name: router_http
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: 127.0.0.1
+                          port_value: 8080
+        - name: router_grpc
+          connect_timeout: 1s
+          type: STATIC
+          typed_extension_protocol_options:
+            envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+              "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+              explicit_http_config:
+                http2_protocol_options: {}
+          load_assignment:
+            cluster_name: router_grpc
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: 127.0.0.1
+                          port_value: 9090
