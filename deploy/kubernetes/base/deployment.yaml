@@ -34,7 +34,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: router
-          image: ghcr.io/andrii2g/kafka-edge-router:v0.1.0-rc.1
+          # The deployment script replaces this fail-closed placeholder with a verified digest.
+          image: ghcr.io/andrii2g/kafka-edge-router@sha256:0000000000000000000000000000000000000000000000000000000000000000
           imagePullPolicy: Always
           args: ["--config", "/etc/router/router.toml"]
           env:
@@ -73,7 +74,7 @@ spec:
             - name: tmp
               mountPath: /tmp
         - name: tls-proxy
-          image: envoyproxy/envoy:distroless-v1.38.0
+          image: envoyproxy/envoy:distroless-v1.38.0@sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6
           imagePullPolicy: IfNotPresent
           args: ["-c", "/etc/envoy/envoy.yaml", "--log-level", "warning"]
           ports:

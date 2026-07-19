@@ -29,7 +29,7 @@ under `docs/release-evidence/<version>/` or in an immutable external evidence sy
   rebalances, and rolling restarts without unexplained RSS, queue, subscription, or lag
   growth.
 - [ ] The candidate image runs as UID/GID `10001:10001`, passes configuration validation,
-  and satisfies the fixed HIGH/CRITICAL vulnerability policy.
+  and has no HIGH/CRITICAL vulnerability unless a scoped, approved exception exists.
 - [ ] The Kubernetes overlay passes server-side validation with production-equivalent
   Secrets, Kafka connectivity, observability, resources, and disruption settings.
 - [ ] The release-candidate game day completes every scenario below, including rollback,
@@ -64,8 +64,8 @@ The workflow publishes:
 - curated notes plus a bounded commit changelog.
 
 The image gate builds from the committed lockfile, verifies UID/GID `10001:10001`, checks
-its default configuration, and rejects fixed HIGH or CRITICAL vulnerabilities under the
-repository policy. Keyless signatures bind artifacts to the GitHub Actions OIDC identity;
+its default configuration, and rejects HIGH or CRITICAL vulnerabilities unless the repository contains a scoped,
+approved exception. Keyless signatures bind artifacts to the GitHub Actions OIDC identity;
 no long-lived signing key is stored in repository secrets.
 
 ## Verification
@@ -85,6 +85,7 @@ cosign verify \
   "$IMAGE"
 gh attestation verify routerd-v0.1.0-rc.1-x86_64-unknown-linux-gnu.tar.gz \
   --repo andrii2g/kafka-edge-router
+gh attestation verify "oci://$IMAGE" --repo andrii2g/kafka-edge-router
 ```
 
 Extract and execute `routerd --check-config` before deployment. Deploy the immutable image
@@ -94,9 +95,10 @@ digest from `IMAGE-DIGEST`, not a mutable tag.
 
 1. Create `kafka-edge-router-config`, `kafka-edge-router-identity`, and
    `kafka-edge-router-tls` Secrets through the cluster secret-management system.
-2. Render the selected Kustomize overlay and review image digest, namespace, network
-   selectors, resources, Kafka endpoints, and issuer/audience.
-3. Apply with server-side field management and wait for rollout completion.
+2. Review the selected overlay, namespace, network selectors, resources, Kafka endpoints,
+   issuer, and audience.
+3. Deploy through `scripts/deploy-kubernetes.sh`, which verifies the release signature and
+   attestation, injects the immutable digest, applies server-side, and checks the rollout.
 4. Confirm every pod resolves a distinct Kafka group id ending in its `POD_UID`.
 5. Check readiness, consumer lag, reconnect rate, queue-full outcomes, webhook retries,
    memory, and p99 latency through one full traffic cycle.

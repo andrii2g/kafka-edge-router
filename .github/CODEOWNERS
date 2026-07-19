@@ -3,3 +3,12 @@
 /crates/router-api/ @andrii2g
 /crates/router-webhook/ @andrii2g
 /docs/adr/ @andrii2g
+/Cargo.toml @andrii2g
+/Cargo.lock @andrii2g
+/rust-toolchain.toml @andrii2g
+/Dockerfile @andrii2g
+/.github/ @andrii2g
+/deny.toml @andrii2g
+/supply-chain/ @andrii2g
+/deploy/kubernetes/ @andrii2g
+/scripts/deploy-kubernetes.sh @andrii2g

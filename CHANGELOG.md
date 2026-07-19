@@ -37,3 +37,7 @@ All notable changes to this project are documented here. The project follows
   redirect blocking, and destination host and port policy.
 - Added dependency auditing, secret scanning, container vulnerability scanning, SBOMs,
   provenance attestations, checksums, and keyless artifact signatures.
+- Enforced crates.io source and license policy, explicit cargo-vet trust records,
+  SHA-pinned GitHub Actions, digest-pinned container inputs, and Dependabot review PRs.
+- Added dependency-review gates and digest-only Kubernetes deployment with Cosign and
+  GitHub provenance verification.

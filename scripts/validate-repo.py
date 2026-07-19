@@ -205,6 +205,66 @@ def check_proto() -> None:
         error(f"duplicate protobuf field numbers: {duplicates}")
 
 
+def check_immutable_external_references() -> None:
+    action_pattern = re.compile(r"uses:\s*([^@\s]+)@([^\s#]+)")
+    sha_pattern = re.compile(r"^[0-9a-f]{40}$")
+    for workflow in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        for number, line in enumerate(workflow.read_text(encoding="utf-8").splitlines(), start=1):
+            match = action_pattern.search(line)
+            if (
+                match
+                and not match.group(1).startswith("./")
+                and not sha_pattern.fullmatch(match.group(2))
+            ):
+                error(
+                    f"GitHub Action is not pinned to a commit SHA: "
+                    f"{workflow.relative_to(ROOT)}:{number}"
+                )
+
+    digest_pattern = re.compile(r"@sha256:[0-9a-f]{64}(?:\s|$)")
+    image_files = [
+        ROOT / "Dockerfile",
+        ROOT / "compose.yaml",
+        ROOT / "deploy/kubernetes/base/deployment.yaml",
+    ]
+    for path in image_files:
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            stripped = line.strip()
+            is_reference = (
+                stripped.startswith(("FROM ", "# syntax="))
+                or stripped.startswith("image:")
+            )
+            if is_reference and not digest_pattern.search(stripped):
+                error(
+                    f"container reference is not pinned to a digest: "
+                    f"{path.relative_to(ROOT)}:{number}"
+                )
+
+    placeholder = (
+        "ghcr.io/andrii2g/kafka-edge-router@sha256:"
+        + "0" * 64
+    )
+    deployment = (ROOT / "deploy/kubernetes/base/deployment.yaml").read_text(
+        encoding="utf-8"
+    )
+    deploy_script = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
+    if (
+        placeholder not in deployment
+        or "cosign verify" not in deploy_script
+        or "gh attestation verify" not in deploy_script
+    ):
+        error("Kubernetes deployment must fail closed and verify signatures and provenance")
+
+
+def check_dependency_policy() -> None:
+    for required in ("deny.toml", "supply-chain/config.toml", "supply-chain/audits.toml"):
+        if not (ROOT / required).is_file():
+            error(f"missing dependency policy: {required}")
+    for manifest in repository_paths("Cargo.toml"):
+        text = manifest.read_text(encoding="utf-8")
+        if re.search(r"\bgit\s*=", text):
+            error(f"git dependency is not allowed: {manifest.relative_to(ROOT)}")
+
 def main() -> int:
     os.chdir(ROOT)
     check_expected()
@@ -217,6 +277,8 @@ def main() -> int:
     check_markdown_links()
     check_workspace_members()
     check_proto()
+    check_immutable_external_references()
+    check_dependency_policy()
 
     if ERRORS:
         print(f"repository validation failed with {len(ERRORS)} error(s):", file=sys.stderr)
